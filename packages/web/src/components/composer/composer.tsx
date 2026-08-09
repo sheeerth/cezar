@@ -103,7 +103,16 @@ export interface ComposerHandle {
   insertAtCaret: (snippet: string) => void
 }
 
-const QUICK_REPLIES: Record<string, string> = { KeyA: 'Yes, approved.', KeyC: 'Continue.' }
+// Alt+A → approve, Alt+C → continue. Each entry pins the BARE Latin letter the physical key
+// carries: the chord fires only when the keystroke actually produced that letter (`event.key`
+// still 'a'/'c'), never a diacritic composed off it. On a Polish (and many other) layout AltGr
+// (right Alt) + a/c types ą/ć — that must reach the draft as text, not be swallowed as a canned
+// reply. Windows AltGr also sets ctrlKey (guarded below); Linux/macOS AltGr/Option do not, so the
+// letter check is what keeps "wywołać"/"są" from firing Continue/approve. (#composer-altgr)
+const QUICK_REPLIES: Record<string, { letter: string; reply: string }> = {
+  KeyA: { letter: 'a', reply: 'Yes, approved.' },
+  KeyC: { letter: 'c', reply: 'Continue.' },
+}
 
 export function Composer({
   onSubmit,
@@ -391,11 +400,15 @@ export function Composer({
     if (!quickReplies || disabled) return
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!event.altKey || event.metaKey || event.ctrlKey || event.repeat) return
-      const reply = QUICK_REPLIES[event.code]
-      if (reply === undefined) return
+      // AltGr composes text on many layouts — never treat it as the plain-Alt chord.
+      if (event.getModifierState?.('AltGraph')) return
+      const match = QUICK_REPLIES[event.code]
+      // Only when Alt left the letter bare: a composed diacritic (ą/ć off AltGr+a/c) has
+      // `event.key` === 'ą'/'ć', so it falls through to the textarea as typed text.
+      if (match === undefined || event.key.toLowerCase() !== match.letter) return
       event.preventDefault()
       // Canned replies bypass the draft entirely — nothing to restore on failure.
-      void send(reply, [], false)
+      void send(match.reply, [], false)
     }
     window.addEventListener('keydown', onWindowKeyDown)
     return () => window.removeEventListener('keydown', onWindowKeyDown)
