@@ -285,7 +285,7 @@ Five moves that make the cockpit worth the browser tab:
 
 ## Cockpit tour
 
-Seven views, one browser window, all live over Server-Sent Events (six until you opt into the Inbox):
+Eight views, one browser window, all live over Server-Sent Events (seven until you opt into the Inbox):
 
 | View | What's in it |
 |---|---|
@@ -294,6 +294,7 @@ Seven views, one browser window, all live over Server-Sent Events (six until you
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. |
 | **GitHub** | Open issues and PRs of the repo's origin, read through your logged-in `gh`. Hand an issue straight to the agent — pick a workflow and skills, one click runs it. |
 | **Skills** | Local skills plus the team skills repo, with a rendered body + prompt preview. Refresh pulls the latest from the remote. |
+| **Usage** | How many tokens your agent accounts have actually burned — read from Claude Code's and Codex's own homes, so sessions you started in a terminal count too — beside what cezar's own tasks spent, broken down by agent and by project. Codex's published quota (`% used`, with its reset) is shown verbatim; nothing is ever estimated. A compact read-out sits permanently in the sidebar footer. |
 | **Workflows** | Build a chain by drag-ordering skills, save it as portable YAML, import/export, or delete. Built-ins always come back. |
 | **Settings** | Appearance (dark/light theme, accent, density), agent backends, notifications, and the skills catalog. |
 

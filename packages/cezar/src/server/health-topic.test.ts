@@ -99,9 +99,9 @@ describe('health topic + cache (live-server path)', () => {
     return ((await res.json()) as { defaultRunner?: string }).defaultRunner;
   };
 
-  it('registers exactly one `health` topic', () => {
+  it('registers the `health` topic exactly once, beside the workspace topics', () => {
     const { topics } = build();
-    expect([...topics.keys()]).toEqual(['health']);
+    expect([...topics.keys()]).toEqual(['health', 'usage']);
   });
 
   it('pre-warms the cache at boot so the first GET is already warm', async () => {

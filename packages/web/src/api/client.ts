@@ -91,6 +91,7 @@ import type {
   StartTodoResponse,
   TodoItem,
   UiState,
+  UsageSnapshot,
   WorkflowsResponse,
   WorkspaceConfigResponse,
   WorkspaceUiState,
@@ -442,6 +443,13 @@ export async function getProjectRuns(projectId: string, opts?: ReadOptions): Pro
  *  project-scoped spelling and never takes `queryScope()`. */
 export async function getRunsIndex(opts?: ReadOptions): Promise<RunsIndexResponse> {
   return unwrap(await cez.api.v1.workspace['runs-index'].$get({}, init(opts)), '/workspace/runs-index')
+}
+
+/** Token usage (`GET /api/v1/workspace/usage`) — the agent accounts' own consumption plus what
+ *  cezar's runs spent. Workspace-level like the registry: a plan belongs to an account, not to a
+ *  repo, so this never takes `queryScope()`. */
+export async function getTokenUsage(opts?: ReadOptions): Promise<UsageSnapshot> {
+  return unwrap(await cez.api.v1.workspace.usage.$get({}, init(opts)), '/workspace/usage')
 }
 
 export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {

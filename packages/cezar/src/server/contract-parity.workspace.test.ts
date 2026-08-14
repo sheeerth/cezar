@@ -20,7 +20,7 @@ import type {
   removeProjectResponseSchema,
   updateProjectResponseSchema,
 } from '@open-mercato/cezar-contract';
-import type { runsIndexResponseSchema } from '@open-mercato/cezar-contract';
+import type { runsIndexResponseSchema, usageSnapshotSchema } from '@open-mercato/cezar-contract';
 import type {
   configResponseSchema,
   openProjectInResponseSchema,
@@ -162,11 +162,17 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     200
   >;
 
+  type Usage200 = InferResponseType<(typeof client.api.v1.workspace)['usage']['$get'], 200>;
+
   type _Checks = [
     // the registry
     Assert<Exact<z.infer<typeof projectsResponseSchema>, Projects200>>,
     // the cross-project task index behind ⌘K
     Assert<Exact<z.infer<typeof runsIndexResponseSchema>, RunsIndex200>>,
+    // the token-usage monitor. `buildUsageSnapshot` is annotated with the contract type, so the
+    // interesting half of this check is the WIRE one: an optional key written as an explicit
+    // `undefined` survives tsc and is dropped by `JSON.stringify`, which `JSONParsed` models.
+    Assert<Exact<z.infer<typeof usageSnapshotSchema>, Usage200>>,
     Assert<Exact<z.infer<typeof registerProjectResponseSchema>, RegisterProject200>>,
     Assert<Exact<z.infer<typeof registerProjectResponseSchema>, Checkout200>>,
     Assert<Exact<z.infer<typeof updateProjectResponseSchema>, UpdateProject200>>,

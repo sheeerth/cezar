@@ -40,6 +40,7 @@ import {
   getRunHandoff,
   getRuns,
   getRunsIndex,
+  getTokenUsage,
   getImportableSkills,
   getImportableSkillsWhenReady,
   getSkills,
@@ -87,6 +88,7 @@ import type {
   SetAgentConfigInput,
   UpdateAgentProfileInput,
   UpdateProjectInput,
+  UsageSnapshot,
 } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
 
@@ -199,6 +201,9 @@ export const workspaceQueryKeys = {
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
+  /** Token usage via `GET /api/v1/workspace/usage`. Workspace-led like the registry: an agent
+   *  account's plan describes the machine, not whichever repo happens to be on screen. */
+  usage: ['workspace', 'usage'] as const,
   /** `~/.cezar/ui-state.json` via `GET/PUT /api/workspace/ui-state` (step 2.7) — cross-project
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
    *  appearance + notifications, which describe the user rather than a repo. */
@@ -653,6 +658,62 @@ export function useRuns() {
  * open, and re-opening it seconds later should not re-ask the whole workspace. The active
  * project's rows come from `useRuns()` anyway, so the live half of the list is never this stale.
  */
+/**
+ * Token usage — the shell's usage chip and the `/usage` page read this one cache.
+ *
+ * A pure read, exactly like `useHealth`: the HTTP query bootstraps and reconciles, and
+ * `useTokenUsageSubscription` (once, at the root) folds pushed `usage` frames into the same entry. The
+ * `staleTime` matches the server's own revalidation cadence — asking more often cannot produce a
+ * newer number, it can only re-walk transcripts.
+ */
+export function useTokenUsage(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.usage,
+    queryFn: ({ signal }) => getTokenUsage({ signal }),
+    enabled,
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * The ONE session-long `usage` topic subscription. Call it exactly once, at the app root — never
+ * from `useTokenUsage`.
+ *
+ * Session-global for the same reason health is: the usage chip lives in the always-present shell,
+ * so its demand is the whole session and a per-consumer subscription would flap the topic on every
+ * mount and StrictMode remount. Local mode only, on the same grounds — a browser WebSocket cannot
+ * carry a reverse proxy's credentials, so remote cockpits stay on authenticated HTTP.
+ *
+ * The server publisher exists ONLY while this subscription is held (demand-driven topics), which
+ * is what keeps a headless `cezar serve` from scanning transcripts for nobody.
+ */
+export function useTokenUsageSubscription(): void {
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    let releaseTopic: (() => void) | undefined
+
+    const syncTransport = (): void => {
+      const health = queryClient.getQueryData<HealthResponse>(queryKeys.health)
+      const local = health?.capabilities?.localHandoff === true
+      if (local && releaseTopic === undefined) {
+        releaseTopic = subscribeTopic('usage', (data) => {
+          queryClient.setQueryData(workspaceQueryKeys.usage, data as UsageSnapshot)
+        })
+      } else if (!local && releaseTopic !== undefined) {
+        releaseTopic()
+        releaseTopic = undefined
+      }
+    }
+
+    syncTransport()
+    const releaseCache = queryClient.getQueryCache().subscribe(syncTransport)
+    return () => {
+      releaseCache()
+      releaseTopic?.()
+    }
+  }, [queryClient])
+}
+
 export function useRunsIndex(enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.runsIndex,

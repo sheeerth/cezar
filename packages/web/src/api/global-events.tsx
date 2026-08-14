@@ -13,7 +13,12 @@ import {
   type UsageStore,
 } from './events'
 import { apiPath, getApiScope } from '@open-mercato/cezar-api-client'
-import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
+import {
+  queryKeys,
+  useHealthSubscription,
+  useTokenUsageSubscription,
+  workspaceQueryKeys,
+} from './queries'
 import type {
   ApiRun,
   HealthResponse,
@@ -380,6 +385,9 @@ export function GlobalEventsProvider({ children }: { children: ReactNode }) {
   // mounted for the app's whole life, so health stays live continuously instead of flapping with
   // the lifecycles of the ~15 `useHealth` readers below.
   useHealthSubscription()
+  // The `usage` topic, for the same reason and at the same place: the shell's token chip is
+  // present for the whole session, and the server's transcript scan only runs while this is held.
+  useTokenUsageSubscription()
   return <UsageContext.Provider value={usage}>{children}</UsageContext.Provider>
 }
 

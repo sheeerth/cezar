@@ -31,6 +31,7 @@ import {
   settingsSectionPath,
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
+import { UsageRoute } from './routes/usage'
 import { AutomationsRoute } from './routes/automations/automations'
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
@@ -458,6 +459,12 @@ export function AppRoutes() {
         {/* The follow-up inbox (R6 Step 1.2): light — no markdown stack — so it rides the main
             bundle like the overview does. */}
         <Route path="inbox" element={<InboxRoute />} />
+
+        {/* Token usage. Scoped like every other view so the sidebar's links stay inside the
+            active project, though the data it reads is workspace-level (one registry of agent
+            accounts, every project's runs) and the page says so. Light — plain numbers and CSS
+            bars, no chart library — so it rides the main bundle. */}
+        <Route path="usage" element={<UsageRoute />} />
 
         {/* The workflow builder (R6 Step 1.6): /workflows opens the canvas on the repo's first
             saved chain, /workflows/:name deep-links a specific one. */}

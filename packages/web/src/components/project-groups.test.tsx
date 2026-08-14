@@ -162,6 +162,7 @@ describe('ProjectGroups', () => {
       '/p/shop/git',
       '/p/shop/github',
       '/p/shop/skills',
+      '/p/shop/usage',
       '/p/shop/workflows',
       '/p/shop/settings',
     ])

@@ -9,6 +9,7 @@ import { ListViewProvider } from '@/components/list-view'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
+import { UsageChip } from '@/components/usage-chip'
 import { ToolsMenu } from '@/components/tools-menu'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { useActiveProjectId } from '@/lib/project-router'
@@ -153,6 +154,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
           ) : undefined
         }
         toolsMenu={<ToolsMenu health={health.data} />}
+        usageChip={<UsageChip />}
       >
         {children}
       </AppShell>
