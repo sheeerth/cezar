@@ -75,6 +75,32 @@ describe('readClaudeUsage', () => {
     expect(summarizeSamples(read.samples, NOW).windows[0]!.totals.tokens).toBe(60);
   });
 
+  it('still de-duplicates a line that carries no requestId', async () => {
+    // Measured on real transcripts: a small minority of usage lines carry `message.id` and no
+    // `requestId`. Keying on both would leave those with no key at all — counted once per copy,
+    // which is the exact failure the key exists to prevent.
+    const noRequestId = {
+      type: 'assistant',
+      timestamp: iso(-60_000),
+      message: { id: 'msg_solo', model: 'claude-opus-5', usage: { input_tokens: 10, output_tokens: 20 } },
+    };
+    writeTranscript('session.jsonl', [noRequestId, noRequestId]);
+    const read = await readClaudeUsage(home, NOW);
+    expect(summarizeSamples(read.samples, NOW).windows[0]!.totals.tokens).toBe(30);
+  });
+
+  it('keeps a keyless line countable when the vendor writes neither identifier', async () => {
+    writeTranscript('session.jsonl', [
+      {
+        type: 'assistant',
+        timestamp: iso(-60_000),
+        message: { model: 'claude-opus-5', usage: { input_tokens: 1, output_tokens: 1 } },
+      },
+    ]);
+    const [sample] = (await readClaudeUsage(home, NOW)).samples;
+    expect(sample?.key).toBeUndefined();
+  });
+
   it('splits cache traffic out so the weighting can price it', async () => {
     writeTranscript('session.jsonl', [
       claudeReply({

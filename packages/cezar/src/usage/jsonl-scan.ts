@@ -54,47 +54,75 @@ export interface JsonlScanOptions {
    * that wants to carry that forward needs to know which session it is reading.
    */
   parse: (value: unknown, filePath: string) => UsageSample[];
+  /**
+   * Called with every path this scan stopped tracking — deleted, rotated out, aged past the
+   * cutoff, or dropped by the file cap.
+   *
+   * It exists because a caller may keep its own per-file memory (the Codex reader remembers which
+   * model a session declared), and a second map that nothing ever prunes grows for the life of a
+   * `cezar serve` as sessions rotate daily. One eviction signal, both caches.
+   */
+  onForget?: (filePath: string) => void;
+}
+
+export interface JsonlScanResult {
+  /** Every sample under the directory, in no particular order. */
+  samples: UsageSample[];
+  /** The newest `.jsonl` by mtime, or `null` — the freshest state the vendor wrote. */
+  newestPath: string | null;
+  /** How many files the cap dropped. Non-zero means the numbers are an undercount. */
+  droppedFiles: number;
 }
 
 /**
- * Every sample under `dir`, in no particular order.
+ * Read a whole tree of append-only JSONL logs.
  *
  * A missing directory is not an error — it is what an agent that has never run on this machine
  * looks like — so it yields nothing. An unreadable subdirectory is skipped for the same reason:
  * one locked folder must not cost the whole account its numbers.
+ *
+ * `newestPath` rides along rather than being a second function: a caller that wants both the
+ * samples and the freshest file (Codex needs the newest session's quota line) would otherwise walk
+ * the same tree twice per refresh.
  */
-export async function scanJsonlTree(dir: string, options: JsonlScanOptions): Promise<UsageSample[]> {
+export async function scanJsonlTree(
+  dir: string,
+  options: JsonlScanOptions,
+): Promise<JsonlScanResult> {
   const files: { path: string; size: number; mtimeMs: number }[] = [];
-  await collectFiles(dir, 0, options.cutoffMs, files);
+  await collectFiles(dir, 0, options, files);
   // Newest first, so a truncating cap keeps the files a user is most likely asking about.
   files.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const kept = files.slice(0, MAX_FILES);
 
   const live = new Set(kept.map((file) => file.path));
   for (const path of [...cache.keys()]) {
-    if (!live.has(path)) cache.delete(path);
+    if (!live.has(path)) forget(path, options);
   }
+  for (const file of files.slice(MAX_FILES)) forget(file.path, options);
 
   const samples: UsageSample[] = [];
   for (const file of kept) {
     const parsed = await readFileSamples(file, options.parse, options.cutoffMs);
     for (const sample of parsed) samples.push(sample);
   }
-  return samples;
+  return {
+    samples,
+    newestPath: kept[0]?.path ?? null,
+    droppedFiles: files.length - kept.length,
+  };
 }
 
-/** The newest `.jsonl` under `dir` (by mtime), or `null`. The freshest state a vendor wrote. */
-export async function newestJsonlFile(dir: string, cutoffMs: number): Promise<string | null> {
-  const files: { path: string; size: number; mtimeMs: number }[] = [];
-  await collectFiles(dir, 0, cutoffMs, files);
-  if (files.length === 0) return null;
-  return files.reduce((newest, file) => (file.mtimeMs > newest.mtimeMs ? file : newest)).path;
+/** Stop tracking a path, in this module's cache and in the caller's own per-file memory. */
+function forget(path: string, options: JsonlScanOptions): void {
+  cache.delete(path);
+  options.onForget?.(path);
 }
 
 async function collectFiles(
   dir: string,
   depth: number,
-  cutoffMs: number,
+  options: JsonlScanOptions,
   out: { path: string; size: number; mtimeMs: number }[],
 ): Promise<void> {
   if (depth > MAX_DEPTH) return;
@@ -107,15 +135,15 @@ async function collectFiles(
   for (const entry of entries) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
-      await collectFiles(path, depth + 1, cutoffMs, out);
+      await collectFiles(path, depth + 1, options, out);
       continue;
     }
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
     try {
       const stats = await stat(path);
       // Untouched since the floor ⇒ every line in it is older than the floor.
-      if (stats.mtimeMs < cutoffMs) {
-        cache.delete(path);
+      if (stats.mtimeMs < options.cutoffMs) {
+        forget(path, options);
         continue;
       }
       out.push({ path, size: stats.size, mtimeMs: stats.mtimeMs });

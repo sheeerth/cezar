@@ -1,9 +1,9 @@
-import { existsSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { UsageLimit } from '@open-mercato/cezar-contract';
 
-import { newestJsonlFile, readJsonlTail, scanJsonlTree } from './jsonl-scan.ts';
+import { readJsonlTail, scanJsonlTree } from './jsonl-scan.ts';
 import { retentionStartMs, type UsageSample } from './samples.ts';
 
 /**
@@ -52,12 +52,38 @@ function num(value: unknown): number | undefined {
  */
 export async function readClaudeUsage(home: string, now: number): Promise<ProviderUsageRead> {
   const projects = join(home, 'projects');
-  if (!existsSync(projects)) return unavailable('no transcripts recorded for this account yet');
+  if (!(await isDirectory(projects))) {
+    return unavailable('no transcripts recorded for this account yet');
+  }
   const cutoffMs = retentionStartMs(now);
-  const samples = await scanJsonlTree(projects, { cutoffMs, parse: parseClaudeLine });
+  const scan = await scanJsonlTree(projects, { cutoffMs, parse: parseClaudeLine });
+  warnOnDroppedFiles('claude', scan.droppedFiles);
   // Claude publishes no quota figure to disk — `/usage` in the CLI asks the API. An empty
   // `limits` is therefore the honest answer, not a gap waiting to be filled with a guess.
-  return { available: true, samples, limits: [] };
+  return { available: true, samples: scan.samples, limits: [] };
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The file cap is the one place this module can undercount without noticing, so it says so.
+ *
+ * A warning rather than a wire field: reaching 5 000 transcripts inside a 30-day window is far
+ * outside normal use, and a permanent contract field for it would ask every consumer to render a
+ * case nobody will meet. Silence, though, would let an undercount read as a measurement.
+ */
+function warnOnDroppedFiles(provider: string, dropped: number): void {
+  if (dropped > 0) {
+    console.warn(
+      `cezar: usage scan for ${provider} skipped ${dropped} transcript file(s) past the per-scan cap; reported tokens are an undercount`,
+    );
+  }
 }
 
 function parseClaudeLine(value: unknown): UsageSample[] {
@@ -81,7 +107,14 @@ function parseClaudeLine(value: unknown): UsageSample[] {
     cacheWriteTokens: num(usage.cache_creation_input_tokens) ?? 0,
   };
   if (model) sample.model = model;
-  if (id && requestId) sample.key = `${id}:${requestId}`;
+  // `message.id` alone already identifies a reply, so it is the key whenever it exists; the
+  // request id is appended only as extra separation when the vendor wrote one. Requiring BOTH
+  // would leave a line that carries no `requestId` with no key at all — and therefore counted
+  // once per copy, which is exactly the failure this key exists to prevent. Measured on 30 days
+  // of real transcripts: 23 of 10 267 usage lines carry no `requestId` (all of them zero-token
+  // synthetic entries today, so nothing is double-counted in practice — but the guard is one
+  // `||` away and the format is not this repo's to freeze).
+  if (id) sample.key = requestId ? `${id}:${requestId}` : id;
   // Present on older transcripts only, and only for API-key billing. Taken when the vendor wrote
   // it; never derived from a price table cezar would have to keep current.
   const cost = num(value.costUSD);
@@ -101,11 +134,19 @@ const codexSessionModel = new Map<string, string>();
  */
 export async function readCodexUsage(home: string, now: number): Promise<ProviderUsageRead> {
   const sessions = join(home, 'sessions');
-  if (!existsSync(sessions)) return unavailable('no sessions recorded for this account yet');
+  if (!(await isDirectory(sessions))) {
+    return unavailable('no sessions recorded for this account yet');
+  }
   const cutoffMs = retentionStartMs(now);
-  const samples = await scanJsonlTree(sessions, { cutoffMs, parse: parseCodexLine });
-  const limits = await readCodexLimits(sessions, cutoffMs);
-  return { available: true, samples, limits };
+  const scan = await scanJsonlTree(sessions, {
+    cutoffMs,
+    parse: parseCodexLine,
+    // The remembered model is per rollout file, so it is forgotten with the file.
+    onForget: (path) => codexSessionModel.delete(path),
+  });
+  warnOnDroppedFiles('codex', scan.droppedFiles);
+  const limits = await readCodexLimits(scan.newestPath);
+  return { available: true, samples: scan.samples, limits };
 }
 
 function parseCodexLine(value: unknown, filePath: string): UsageSample[] {
@@ -145,12 +186,12 @@ function parseCodexLine(value: unknown, filePath: string): UsageSample[] {
  * Read from the newest session's TAIL rather than from the scan above, and deliberately so: the
  * scan is incremental, so a line it already consumed is never handed to a parser again, and a
  * quota reading that only refreshes when a file happens to be re-read from zero would be stale in
- * exactly the situation it matters.
+ * exactly the situation it matters. The path comes from the scan that just ran, so finding it
+ * costs no second walk of the tree.
  */
-async function readCodexLimits(sessions: string, cutoffMs: number): Promise<UsageLimit[]> {
-  const newest = await newestJsonlFile(sessions, cutoffMs);
-  if (!newest) return [];
-  const lines = await readJsonlTail(newest, 256 * 1024);
+async function readCodexLimits(newestPath: string | null): Promise<UsageLimit[]> {
+  if (!newestPath) return [];
+  const lines = await readJsonlTail(newestPath, 256 * 1024);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     let value: unknown;
     try {

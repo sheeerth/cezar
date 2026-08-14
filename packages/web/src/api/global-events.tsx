@@ -110,7 +110,11 @@ export function onWorkspaceEvent(
  *   instead (#369). Invalidating it here too costs nothing extra and keeps this list a complete
  *   "everything the stream can leave stale" note;
  * - worktrees: run terminal transitions and reclaim operations change the resources panel;
- * - provider status: runtime authentication failures patch this workspace-wide cache live.
+ * - provider status: runtime authentication failures patch this workspace-wide cache live;
+ * - token usage: pushed live by the `usage` WS topic in LOCAL mode only, because a browser
+ *   WebSocket cannot carry a reverse proxy's credentials. A remote cockpit therefore has no other
+ *   refresh path at all — without this line its usage chip and `/usage` page would freeze on the
+ *   first snapshot for as long as the tab stays open.
  *
  * `invalidateQueries` and not `refetchQueries`: it refetches what is actually rendered and marks
  * the rest stale for whenever it next mounts. A background tab with fifty cached runs should not
@@ -123,6 +127,7 @@ function reconcile(queryClient: QueryClient): void {
   // The worktree panel's list/total (#483) — a run finishing or a reclaim changes it.
   void queryClient.invalidateQueries({ queryKey: queryKeys.worktrees })
   void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus })
+  void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.usage })
 }
 
 /**

@@ -5285,9 +5285,9 @@ export function createApp(deps: ServerDeps) {
         : undefined;
       entries = await listProjects(selector);
     } catch {
-      // An unreadable workspace is an empty usage answer, never a 500 — the same degrade the
-      // run index makes for the same reason.
-      return { projects: [], unreadable: [] };
+      // An unreadable workspace still has the boot project's own store in hand, so this degrades
+      // to that rather than to nothing — never a 500.
+      entries = [];
     }
     const bootId = await resolveBootProject(entries);
     const projects: RunsUsageProject[] = [];
@@ -5302,6 +5302,19 @@ export function createApp(deps: ServerDeps) {
         ? owned.store.listRuns()
         : readRunIndexFromDisk(join(project.root, '.ai/cezar'));
       projects.push({ projectId: project.id, label: project.name, runs });
+    }
+    // The boot project is NOT always in the registry: registration is deliberately suppressed for
+    // task worktrees and for `$HOME` itself (`shouldRegisterProject`), and an unreadable registry
+    // drops everything. Its store is right here either way, and unlike the ⌘K index — which
+    // degrades onto the active project's own `GET /runs` — this route is the only source its
+    // reader has. Without this, a cezar serving a task worktree would report "0 tokens spent"
+    // while the runs that spent them sit in the store it is holding.
+    if (!projects.some((project) => project.projectId === bootId)) {
+      projects.unshift({
+        projectId: bootId,
+        label: basename(bootRoot),
+        runs: bootContext.store.listRuns(),
+      });
     }
     return { projects, unreadable };
   };
@@ -5349,6 +5362,10 @@ export function createApp(deps: ServerDeps) {
   };
 
   const readUsage = async (): Promise<UsagePayload> => {
+    // No hub means no publisher keeping this cache warm, so serving from it would hand out an
+    // answer with nothing scheduled to correct it. Compute fresh instead — the same branch, for
+    // the same reason, that `readHealth` opens with.
+    if (!deps.socketHub) return usageSnapshot();
     if (!usageCache) return refreshUsage();
     const age = Date.now() - usageCache.at;
     if (age > USAGE_MAX_STALE_MS) return refreshUsage();

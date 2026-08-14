@@ -55,6 +55,8 @@ What each vendor writes to disk, verified on 2026-08-14 (Claude Code 2.1.226):
 
 The route reuses the run index's ownership rule verbatim: an unowned project is read straight off `runs.json` (`readRunIndexFromDisk`), never through a built context — opening a usage panel must not prune worktrees or resume agents.
 
+It diverges from the index in one place: the boot project is counted even when the registry does not list it. Registration is suppressed for task worktrees and for `$HOME` (`shouldRegisterProject`), and the palette can shrug that off because the active project's own `GET /runs` still feeds it — this route has no second source, so the same omission would print a confident zero.
+
 ### The cockpit
 
 - `UsageChip` in the sidebar footer — the always-there read-out: tokens in the last 5 h, and the tightest published quota when one exists. Absent, never zeroed, when there is nothing honest to say.

@@ -47,12 +47,15 @@ async function readAccount(account: ResolvedAgentProfile, now: number): Promise<
       account.provider === 'codex'
         ? await readCodexUsage(account.path, now)
         : await readClaudeUsage(account.path, now);
-  } catch (error) {
+  } catch {
     read = {
       available: false,
-      // The message only ever names the failure, never the path: this route answers a trusted
-      // caller, but a home directory is still the one string worth not repeating by reflex.
-      reason: error instanceof Error ? error.message : 'could not be read',
+      // A FIXED string, never the error's own message. Node's fs errors quote the path they
+      // failed on (`EACCES: permission denied, scandir '/home/…/.claude/projects'`), and while
+      // this route answers a trusted same-origin caller, a home directory is the one string not
+      // worth repeating by reflex. The readers below already swallow their own I/O failures, so
+      // reaching here at all means something unforeseen — which is what this sentence says.
+      reason: 'could not be read',
       samples: [],
       limits: [],
     };

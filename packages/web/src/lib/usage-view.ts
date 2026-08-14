@@ -106,7 +106,12 @@ export function barPercent(value: number, max: number): number {
  * The last `days` calendar days ending today, zero-filled — a chart with gaps for idle days
  * would compress the timeline and make a quiet week look like a busy one.
  *
- * `today` is the browser's local day, matching the server's local-midnight bucketing.
+ * `today` is the BROWSER's local day, and it lines up with the server's local-midnight bucketing
+ * only because the two run on the same machine: the account cards this feeds exist in local mode
+ * alone (a hosted cockpit is served `accounts: []`, since those homes are elsewhere). Should a
+ * daily series ever be rendered for a remotely served surface, the two clocks can differ by a
+ * whole day and every generated key would miss its bucket — the chart would quietly read zero.
+ * Bucket by the server's own dates then, rather than regenerating them here.
  */
 export function fillDailySeries(
   daily: readonly { date: string; totals: UsageTotals }[],
