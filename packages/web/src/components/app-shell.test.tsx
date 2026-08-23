@@ -111,6 +111,7 @@ describe('AppShell', () => {
       'GitHub',
       'Automations',
       'Skills',
+      'Usage',
       'Workflows',
       'Settings',
     ])
@@ -122,6 +123,7 @@ describe('AppShell', () => {
       '/github',
       '/automations',
       '/skills',
+      '/usage',
       '/workflows',
       '/settings',
     ])

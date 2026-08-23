@@ -79,6 +79,9 @@ export type AppShellProps = {
   taskQuickList?: ReactNode
   /** Step 4.2's Tools dropdown trigger. */
   toolsMenu?: ReactNode
+  /** The sidebar footer's token read-out. A SLOT like the two above, for the same reason: the
+   *  shell stays presentational, and the container injects the piece that reads the API. */
+  usageChip?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
    *  Defaults to shown so the presentational shell stays renderable alone; the container
    *  passes the health payload's truth. */
@@ -154,6 +157,7 @@ export function AppShell({
   latestVersion = null,
   taskQuickList,
   toolsMenu,
+  usageChip,
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
@@ -226,6 +230,7 @@ export function AppShell({
     latestVersion,
     taskQuickList,
     toolsMenu,
+    usageChip,
     projectGroups,
     singleProject,
   }
@@ -283,6 +288,7 @@ type NavProps = {
   latestVersion: string | null
   taskQuickList?: ReactNode
   toolsMenu?: ReactNode
+  usageChip?: ReactNode
   projectGroups?: ReactNode
   singleProject: boolean
 }
@@ -466,6 +472,7 @@ function SidebarContent({
   latestVersion,
   taskQuickList,
   toolsMenu,
+  usageChip,
   projectGroups,
   singleProject,
   onNavigate,
@@ -626,6 +633,10 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
+        {/* Its own row rather than a sixth chip in the controls line below: that line already
+         *  overflowed the 264px column once (#702), and the usage read-out wants the width for a
+         *  number, a quota bar and a percentage. */}
+        {usageChip}
         <CommandPaletteHint />
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
           {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}

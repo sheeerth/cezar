@@ -82,6 +82,8 @@ import {
   validateLiveCursor,
 } from '../runs/event-history.ts';
 import { readRunIndexFromDisk } from '../runs/run-index.ts';
+import { buildUsageSnapshot } from '../usage/snapshot.ts';
+import type { RunsUsageProject } from '../usage/runs-usage.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import {
   runEventsQuerySchema,
@@ -5421,6 +5423,138 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     });
 
+  // ---- chained family: token usage (workspace-level) -----------------------
+  /**
+   * `GET /workspace/usage` — how many tokens the machine's agent accounts have burned, and how
+   * much of that cezar spent (spec `2026-08-14-token-usage-monitor`).
+   *
+   * Workspace-level and single-mount for the same reason as the run index: an account's plan is
+   * not a property of one repo, and a project-scoped spelling of "every project" is a
+   * contradiction. The per-project source is chosen exactly the way the run index chooses it —
+   * `bootContext` for the boot project, `contexts.peek` for anything already owned, disk
+   * otherwise, and NEVER `contexts.context()`, which would prune worktrees and `recover()`
+   * running agents. Opening a usage panel must not resume work.
+   *
+   * Hosted mode serves the runs half only: the account homes are on a machine the reader does not
+   * have, and their paths are host disclosure the agent-profiles family already withholds.
+   */
+  const readUsageProjects = async (): Promise<{
+    projects: RunsUsageProject[];
+    unreadable: string[];
+  }> => {
+    let entries: ProjectListEntry[] = [];
+    try {
+      const selector = capabilities().singleProject
+        ? { projectId: await resolveBootProject() }
+        : undefined;
+      entries = await listProjects(selector);
+    } catch {
+      // An unreadable workspace still has the boot project's own store in hand, so this degrades
+      // to that rather than to nothing — never a 500.
+      entries = [];
+    }
+    const bootId = await resolveBootProject(entries);
+    const projects: RunsUsageProject[] = [];
+    const unreadable: string[] = [];
+    for (const project of entries) {
+      if (project.status === 'missing') {
+        unreadable.push(project.id);
+        continue;
+      }
+      const owned = project.id === bootId ? bootContext : contexts.peek(project.id);
+      const runs = owned
+        ? owned.store.listRuns()
+        : readRunIndexFromDisk(join(project.root, '.ai/cezar'));
+      projects.push({ projectId: project.id, label: project.name, runs });
+    }
+    // The boot project is NOT always in the registry: registration is deliberately suppressed for
+    // task worktrees and for `$HOME` itself (`shouldRegisterProject`), and an unreadable registry
+    // drops everything. Its store is right here either way, and unlike the ⌘K index — which
+    // degrades onto the active project's own `GET /runs` — this route is the only source its
+    // reader has. Without this, a cezar serving a task worktree would report "0 tokens spent"
+    // while the runs that spent them sit in the store it is holding.
+    if (!projects.some((project) => project.projectId === bootId)) {
+      projects.unshift({
+        projectId: bootId,
+        label: basename(bootRoot),
+        runs: bootContext.store.listRuns(),
+      });
+    }
+    return { projects, unreadable };
+  };
+
+  const usageSnapshot = async () => {
+    const { projects, unreadable } = await readUsageProjects();
+    // Hosted mode reads no home. Local mode reads every account the user has, defaults included,
+    // because "how much have I used" is a question about all of them at once.
+    let accounts: ResolvedAgentProfile[] = [];
+    if (capabilities().localHandoff) {
+      const store = await loadAgentAccounts().catch(() => defaultAgentAccountStore());
+      accounts = listAgentProfiles(store, PROFILE_CAPABLE_PROVIDERS);
+    }
+    return buildUsageSnapshot({ accounts, projects, unreadableProjects: unreadable });
+  };
+
+  // Same stale-while-revalidate shape as health, and for the same reason: the first read walks
+  // every transcript an agent has written this month. After that the scan is incremental (only
+  // bytes the agents appended), so the cadence below costs a few KB per tick.
+  const USAGE_TTL_MS = 30_000;
+  const USAGE_MAX_STALE_MS = 5 * 60_000;
+  type UsagePayload = Awaited<ReturnType<typeof usageSnapshot>>;
+  let usageCache: { at: number; payload: UsagePayload; body: string } | undefined;
+  let usageInFlight: Promise<UsagePayload> | undefined;
+  let publishUsage: (data: unknown) => void = () => {};
+
+  const refreshUsage = (): Promise<UsagePayload> => {
+    if (usageInFlight) return usageInFlight;
+    usageInFlight = (async () => {
+      try {
+        const payload = await usageSnapshot();
+        const body = JSON.stringify(payload);
+        // `generatedAt` moves on every read, so comparing whole bodies would publish every tick.
+        // The comparison drops it: news is a token count changing, not the clock.
+        const comparable = JSON.stringify({ ...payload, generatedAt: '' });
+        const changed = comparable !== usageCache?.body;
+        usageCache = { at: Date.now(), payload, body: comparable };
+        if (changed) publishUsage(payload);
+        return payload;
+      } finally {
+        usageInFlight = undefined;
+      }
+    })();
+    return usageInFlight;
+  };
+
+  const readUsage = async (): Promise<UsagePayload> => {
+    // No hub means no publisher keeping this cache warm, so serving from it would hand out an
+    // answer with nothing scheduled to correct it. Compute fresh instead — the same branch, for
+    // the same reason, that `readHealth` opens with.
+    if (!deps.socketHub) return usageSnapshot();
+    if (!usageCache) return refreshUsage();
+    const age = Date.now() - usageCache.at;
+    if (age > USAGE_MAX_STALE_MS) return refreshUsage();
+    if (age > USAGE_TTL_MS) void refreshUsage();
+    return usageCache.payload;
+  };
+
+  const usageRoutes = new Hono().get('/workspace/usage', async (c) => c.json(await readUsage()));
+
+  // The live twin. Demand-driven like every topic: the interval exists only while a cockpit is
+  // looking at a usage surface, and an idle workspace scans nothing. NOT `loopbackReadable` —
+  // this payload names projects and accounts, so it stays legible to the cockpit alone.
+  deps.socketHub?.registerTopic('usage', {
+    snapshot: readUsage,
+    start: (publish) => {
+      publishUsage = publish;
+      const timer = setInterval(() => void refreshUsage(), USAGE_TTL_MS);
+      timer.unref?.();
+      return () => {
+        clearInterval(timer);
+        publishUsage = () => {};
+      };
+    },
+  });
+
   // Workspace-level families answer for the whole workspace, so they are single-mount: never a
   // project-scoped spelling, which would be a second surface to protect with no consumer.
   const workspaceV1 = new Hono()
@@ -5434,6 +5568,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)
+    .route('/', usageRoutes)
     .route('/', workspaceEventsRoutes);
 
   // ---- mount ---------------------------------------------------------------

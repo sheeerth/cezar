@@ -418,7 +418,7 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
       .mockResolvedValue(undefined)
     const { textarea } = renderComposer({ quickReplies: true, onSubmit })
     type(textarea, 'draft in progress')
-    fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a', altKey: true })
     expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [])
     expect(textarea.value).toBe('draft in progress')
     expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
@@ -430,20 +430,33 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
     await waitFor(() =>
       expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(false),
     )
-    fireEvent.keyDown(window, { code: 'KeyC', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyC', key: 'c', altKey: true })
     expect(onSubmit).toHaveBeenCalledWith('Continue.', [])
   })
 
   it('does nothing without the flag, with other modifiers, or while disabled', () => {
     const { onSubmit } = renderComposer({ quickReplies: true, disabled: true })
-    fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
-    fireEvent.keyDown(window, { code: 'KeyA', altKey: true, ctrlKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a', altKey: true, ctrlKey: true })
     expect(onSubmit).not.toHaveBeenCalled()
     cleanup()
 
     const second = renderComposer() // no quickReplies flag
-    fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a', altKey: true })
     expect(second.onSubmit).not.toHaveBeenCalled()
+  })
+
+  // Regression (#composer-altgr): on a Polish layout AltGr+c / AltGr+a type ć / ą. The keydown
+  // still carries `code: 'KeyC'/'KeyA'` and `altKey: true`, but `event.key` is the composed
+  // diacritic — it must reach the draft as text, not fire the Continue / approve canned reply.
+  it('does NOT fire on AltGr-composed diacritics (ć / ą) — they are text, not the chord', () => {
+    const { onSubmit } = renderComposer({ quickReplies: true })
+    // Linux/macOS AltGr sets altKey without ctrlKey; the composed char is in `event.key`.
+    fireEvent.keyDown(window, { code: 'KeyC', key: 'ć', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'ą', altKey: true })
+    // And where the platform also flags the AltGraph modifier state.
+    fireEvent.keyDown(window, { code: 'KeyC', key: 'ć', altKey: true, modifierAltGraph: true })
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 })
 

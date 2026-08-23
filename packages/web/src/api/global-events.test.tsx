@@ -740,6 +740,9 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.health, // the repo/branch chip — health is not on the stream (#369)
       queryKeys.worktrees, // the Resources panel's list/total (#483)
       workspaceQueryKeys.providerStatus,
+      // Token usage: the `usage` topic is local-mode only, so on a remote cockpit this
+      // reconcile is the ONLY thing that ever refreshes the chip and the /usage page.
+      workspaceQueryKeys.usage,
     ])
   })
 
@@ -762,6 +765,7 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.health,
       queryKeys.worktrees,
       workspaceQueryKeys.providerStatus,
+      workspaceQueryKeys.usage,
     ])
   })
 
