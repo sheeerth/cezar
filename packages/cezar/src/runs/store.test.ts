@@ -377,6 +377,73 @@ describe('RunStore — PR auto-link only on real creation (#fake-pr)', () => {
     } as never);
     expect(store.getRun(run.id)?.pullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/321');
   });
+
+  // The claim must come from something that can speak FOR this run. Verbatim from the task that
+  // wrote this guard: it dumped ANOTHER run's stored events while investigating them, and the
+  // dump contained that run's `"title": "Ran gh pr create …"` next to its PR URL — so this run
+  // adopted a PR in a different repository as its own, forever (the first created URL wins).
+  it('does not believe a creation phrase that arrives inside tool OUTPUT', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 't1',
+        name: 'Bash',
+        toolKind: 'execute',
+        title: 'Ran python3 - <<PY … PY',
+        status: 'completed',
+        input: { command: 'python3 - <<PY\nprint(open("other-run.ndjson").read())\nPY' },
+        output:
+          '{"type":"item.completed","item":{"kind":"tool","title":"Ran gh pr create --repo o/other …",' +
+          '"output":"https://github.com/o/other/pull/5366"}}',
+      },
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.pullRequestUrl).toBeUndefined();
+    // Still a PR URL the conversation mentioned, so the referenced tier keeps it as a candidate —
+    // that tier is allowed to be wrong about a subject, never about authorship.
+    expect(loaded?.referencedPrCandidates).toEqual(['https://github.com/o/other/pull/5366']);
+  });
+
+  it('does not believe a creation phrase the agent merely WROTE into a file', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 't2',
+        name: 'Edit',
+        toolKind: 'edit',
+        title: 'packages/cezar/src/runs/store.test.ts',
+        status: 'completed',
+        input: {
+          new_string: "result: 'Opened a draft pull request: https://github.com/open-mercato/cezar/pull/42'",
+        },
+      },
+    });
+    expect(store.getRun(run.id)?.pullRequestUrl).toBeUndefined();
+  });
+
+  it('still adopts the PR from a real `gh pr create`, whose URL only appears in the output', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 't3',
+        name: 'Bash',
+        toolKind: 'execute',
+        title: 'Ran gh pr create --repo open-mercato/cezar --base main --head cez/x --title "fix…',
+        status: 'completed',
+        input: { command: 'gh pr create --repo open-mercato/cezar --base main' },
+        output: 'https://github.com/open-mercato/cezar/pull/901',
+      },
+    });
+    expect(store.getRun(run.id)?.pullRequestUrl).toBe(
+      'https://github.com/open-mercato/cezar/pull/901',
+    );
+  });
 });
 
 describe('RunStore — secret redaction before persistence (#427)', () => {
@@ -847,6 +914,117 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     store.applyMarkerRefs(run.id, {});
     expect(store.getRun(run.id)?.markerRefs).toBeUndefined();
   });
+
+  // Verbatim from the run that reported it: a task opened on open-mercato#4326 pushed a
+  // fix as its own #5366 and re-declared with the new number, as the marker contract asks. Both
+  // PRs are true, and the record has a field for each — but feeding the re-declaration to the
+  // referenced tier cleared #4326 (no candidate ends in /5366), so the cockpit painted one chip.
+  it('a declaration naming the PR the task CREATED keeps the PR it is about', () => {
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.applyMarkerRefs(run.id, { pr: 4326 });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Reviewing https://github.com/open-mercato/open-mercato/pull/4326.',
+    });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Ran gh pr create … → https://github.com/open-mercato/open-mercato/pull/5366',
+    });
+    store.applyMarkerRefs(run.id, { pr: 5366 });
+
+    const loaded = store.getRun(run.id);
+    expect(loaded?.pullRequestUrl).toBe('https://github.com/open-mercato/open-mercato/pull/5366');
+    expect(loaded?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/4326',
+    );
+    // The about-number too: it is what paints a numeric-only chip, and the created PR already
+    // has a field of its own.
+    expect(loaded?.prNumber).toBe(4326);
+    expect(loaded?.markerRefs?.pr).toBe(5366);
+  });
+
+  it('restores the about-PR when the declaration arrives BEFORE the creation evidence', () => {
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Reviewing https://github.com/open-mercato/open-mercato/pull/4326.',
+    });
+    store.applyMarkerRefs(run.id, { pr: 5366 });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBeUndefined(); // nothing created yet
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Ran gh pr create … → https://github.com/open-mercato/open-mercato/pull/5366',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/4326',
+    );
+  });
+
+  it('still fills an unknown prNumber from a declaration that names the created PR', () => {
+    const { store, run } = freshRun('ship the devices work');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Created a pull request: https://github.com/open-mercato/cezar/pull/42',
+    });
+    store.applyMarkerRefs(run.id, { pr: 42 });
+    expect(store.getRun(run.id)?.prNumber).toBe(42);
+  });
+
+  it('heals a record already written by the bug, on load', () => {
+    // Exactly the shape the bug left on disk: the created PR, the declaration that named it, the
+    // about-PR still sitting in the working set, and the chip it should have painted gone.
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.updateRun(run.id, {
+      pullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/5366',
+      referencedPullRequestUrl: undefined,
+      referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/4326'],
+      markerRefs: { pr: 5366 },
+      prNumber: 5366,
+    });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/4326',
+    );
+  });
+
+  it('never resurrects a chip a live declaration deliberately cleared', () => {
+    // The other direction of the heal, and the one that would quietly undo "no chip beats a wrong
+    // chip": here the declaration names a PR this run did NOT create, so it still owns the
+    // referenced tier and its contradiction with the candidate must survive a reload.
+    const { store, run } = freshRun('task');
+    store.updateRun(run.id, {
+      referencedPullRequestUrl: undefined,
+      referencedPrCandidates: ['https://github.com/open-mercato/cezar/pull/777'],
+      markerRefs: { pr: 500 },
+    });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.referencedPullRequestUrl).toBeUndefined();
+  });
+
+  it('never takes a referenced PR away from a record whose candidates no longer explain it', () => {
+    const { store, run } = freshRun('task');
+    store.updateRun(run.id, {
+      referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/777',
+      referencedPrCandidates: undefined,
+      markerRefs: { pr: 777 },
+    });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/cezar/pull/777',
+    );
+  });
+
+  it('a declaration naming some OTHER PR still overrides the fuzzy tier', () => {
+    const { store, run } = freshRun('task');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Created a pull request: https://github.com/open-mercato/cezar/pull/42',
+    });
+    store.applyMarkerRefs(run.id, { pr: 500 });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.prNumber).toBe(500);
+    expect(loaded?.referencedPullRequestUrl).toBeUndefined(); // no candidate ends in /500
+  });
 });
 
 describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-discovery)', () => {
@@ -1277,5 +1455,156 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
     expect(store.markAllRead()).toBe(1);
     expect(store.getRun(active)?.seenAt).toBeDefined();
     expect(store.getRun(archived)?.seenAt).toBeUndefined();
+  });
+
+  it('markAllRead skips a run waiting out a usage limit, exactly as the cockpit rule does (#803)', () => {
+    // The drift this pins: `isUnread()` (web/src/lib/read-state.ts) gained an `isScheduledResume`
+    // exclusion with the auto-resume work — a `failed` run with a pending `autoResumeAt` is not a
+    // done item, so it wears no marker and the nav badge does not count it — and this sweep never
+    // gained the matching clause. The user-visible symptom: "Mark all read" silently stamped a
+    // task the UI never presented as unread, and reported a count larger than the badge showed.
+    const store = RunStore.open(dataDir);
+    const scheduled = finishedRun(store, 'failed');
+    store.updateRun(scheduled, { autoResumeAt: '2026-08-03T18:41:48.000Z', autoResumeAttempts: 1 });
+    const ordinary = finishedRun(store, 'done');
+
+    // The count is the badge's number: one, not two.
+    expect(store.markAllRead()).toBe(1);
+    expect(store.getRun(ordinary)?.seenAt).toBeDefined();
+    expect(store.getRun(scheduled)?.seenAt).toBeUndefined();
+  });
+
+  it('markAllRead stamps the same run once its resume is no longer pending (#803)', () => {
+    // The exclusion is about the APPOINTMENT, not the failure: clear the schedule and the run is
+    // an ordinary unread `failed` done item again. Without this, the clause above would be
+    // indistinguishable from "never stamp a failed run", which is a different (wrong) rule.
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'failed');
+    store.updateRun(id, { autoResumeAt: '2026-08-03T18:41:48.000Z' });
+    expect(store.markAllRead()).toBe(0);
+
+    store.updateRun(id, { autoResumeAt: undefined });
+    expect(store.markAllRead()).toBe(1);
+    expect(store.getRun(id)?.seenAt).toBeDefined();
+  });
+});
+
+describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('loads a record carrying `claude-cli` and folds it to `claude`', () => {
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        {
+          ...LEGACY_RUN,
+          runner: 'claude-cli',
+          steps: [
+            {
+              id: 'task',
+              name: 'Do the task',
+              kind: 'agent',
+              status: 'done',
+              iterations: 1,
+              tokensUsed: 0,
+              sessionId: 'sess-1',
+              backend: 'claude-cli',
+            },
+          ],
+        },
+      ]),
+      'utf8',
+    );
+
+    const run = RunStore.open(dataDir).getRun('legacy-1');
+    // Parsed, not dropped — and normalized, so no consumer sees a fourth runner id.
+    expect(run?.runner).toBe('claude');
+    expect(run?.steps[0]?.backend).toBe('claude');
+  });
+
+  it('does not let one `claude-cli` record evict the rest of runs.json', () => {
+    // The regression this guards: the loader `safeParse`s the WHOLE array, so before #547 a
+    // single record carrying the legacy id took every other run in the file down with it —
+    // the exact failure mode BACKWARD_COMPATIBILITY.md §3 warns about.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: 'legacy-cli', runner: 'claude-cli' },
+        { ...LEGACY_RUN, id: 'modern', runner: 'codex' },
+      ]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('legacy-cli')?.runner).toBe('claude');
+    expect(store.getRun('modern')?.runner).toBe('codex');
+  });
+
+  it('rewrites the folded id on the next save, so the narrowing is one-way', () => {
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, runner: 'claude-cli' }]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    store.updateRun('legacy-1', { title: 'touched' });
+    store.flush();
+
+    // The index is re-serialized from the PARSED records, so `claude-cli` is gone from disk.
+    const onDisk = readFileSync(join(dataDir, 'runs.json'), 'utf8');
+    expect(onDisk).not.toContain('claude-cli');
+    expect(JSON.parse(onDisk)[0].runner).toBe('claude');
+  });
+
+  it('persists and reloads a `pi` run, index and step alike (#387)', () => {
+    // `storedRunnerSchema` derives from `RUNNER_IDS` rather than re-listing the ids, so a new
+    // runner is readable the moment it is registered. Without this, a completed pi run would
+    // fail the whole-array parse on the next boot and take every other run down with it.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        {
+          ...LEGACY_RUN,
+          runner: 'pi',
+          steps: [
+            {
+              id: 'task',
+              name: 'Do the task',
+              kind: 'agent',
+              status: 'done',
+              iterations: 1,
+              tokensUsed: 0,
+              sessionId: 'pi-sess-1',
+              backend: 'pi',
+            },
+          ],
+        },
+      ]),
+      'utf8',
+    );
+
+    const run = RunStore.open(dataDir).getRun('legacy-1');
+    expect(run?.runner).toBe('pi');
+    expect(run?.steps[0]?.backend).toBe('pi');
+  });
+
+  it('still rejects a runner id that is not a legacy spelling of a real backend', () => {
+    // Widening the READ side is not an invitation to accept anything: an unknown id is still
+    // a parse failure, which is what keeps the enum meaningful.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, runner: 'gemini' }]),
+      'utf8',
+    );
+    expect(RunStore.open(dataDir).getRun('legacy-1')).toBeUndefined();
   });
 });

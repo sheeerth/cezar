@@ -4,8 +4,14 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { join } from 'node:path';
 import { z } from 'zod';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
+import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
+
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
+import type { RunnerId } from '../core/agent-runner.ts';
 
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'review' | 'done' | 'failed' | 'cancelled';
 /**
@@ -28,6 +34,30 @@ export type StepStatus =
 
 const usageCounterSchema = z.number().finite().nonnegative();
 
+/**
+ * A runner id as it may appear in a PERSISTED record, normalized to the three
+ * ids the rest of cezar speaks (#547).
+ *
+ * `claude-cli` is the legacy spelling of `claude` — still a member of
+ * `AgentBackend` and still accepted by `createRunner`, and named by
+ * `BACKWARD_COMPATIBILITY.md` §3 as an id `runs.json` keeps parseable. The enum
+ * here did not accept it, so that promise was false: the loader `safeParse`s the
+ * WHOLE array, so one record carrying it would have dropped every run in the
+ * file — the exact failure mode §3 exists to warn about.
+ *
+ * Parse-and-fold rather than widen: the legacy id is accepted on the way in and
+ * collapsed to `claude`, so no consumer, wire type or contract schema ever sees
+ * a fourth runner. The narrowing is one-way and permanent (the index is
+ * re-serialized from the parsed records), which is what "old run records
+ * normalise identically to `claude`" in `core/model-identity.ts` has always
+ * claimed. Use ONLY for read-back of stored state — request bodies, settings and
+ * workflow step defs stay the three selectable ids (`RunnerId`), because nothing
+ * should be able to ASK for the legacy spelling.
+ */
+const storedRunnerSchema = z
+  .enum([...RUNNER_IDS, 'claude-cli'])
+  .transform((id) => (id === 'claude-cli' ? ('claude' as const) : id));
+
 const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -47,8 +77,9 @@ const stepStateSchema = z.object({
   error: z.string().optional(),
   /** Latest backend-owned session id, used for same-backend Continue. */
   sessionId: z.string().optional(),
-  /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse. */
-  backend: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse;
+   *  `storedRunnerSchema` so a legacy `claude-cli` folds to `claude` instead of failing (#547). */
+  backend: storedRunnerSchema.optional(),
   /** Agent profile (account) this step actually spawned under — `default`, or a stored profile
    *  id (spec 2026-07-29-agent-profiles). Recorded rather than re-derived because a session id
    *  only means something inside the config dir that created it: `sessionId` and `profileId` are
@@ -111,10 +142,15 @@ export const runRecordSchema = z.object({
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the
    *  free-text `model` against the chosen runner. Additive and optional: pre-#405
    *  records carry only `model`, and it stays the human/hand-edit surface; this
-   *  is the parseable identity cost attribution and reproducible replay key off. */
+   *  is the parseable identity cost attribution and reproducible replay key off.
+   *
+   *  Read in production by the session header's agent badge (#546), which shows it
+   *  whenever it says something `model` does not — so this is no longer a
+   *  write-only field whose next reader has to guess whether it is load-bearing. */
   modelIdentity: z.string().optional(),
-  /** Agent backend this run used — drives "open in CLI" resume command. */
-  runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Agent backend this run used — drives "open in CLI" resume command. `storedRunnerSchema`
+   *  so a legacy `claude-cli` record folds to `claude` instead of failing the whole index (#547). */
+  runner: storedRunnerSchema.optional(),
   /** Per-task agent-account override from the composer (spec 2026-07-29-agent-profiles), applying
    *  to steps that run on `runner`. Steps on a DIFFERENT backend still resolve from the project's
    *  own selection — an override for Claude says nothing about which Codex account a mixed
@@ -341,6 +377,42 @@ function eventTextFragments(event: Record<string, unknown>): string[] {
   return fragments;
 }
 
+/**
+ * Where a CREATION CLAIM may come from — the trust boundary the created tier was missing.
+ *
+ * `CREATED_PR_RE` used to be matched against everything an event carried, tool OUTPUT included,
+ * so a transcript that merely QUOTES a `gh pr create` line handed the run a PR it never opened.
+ * Not hypothetical: the task that fixed the reference chips printed another run's stored events
+ * while investigating them, and cezar read `"title": "Ran gh pr create --repo …"` out of that
+ * dump and adopted a PR from a DIFFERENT repository as its own — permanently, because the first
+ * created URL wins and the real `gh pr create` that followed was never looked at.
+ *
+ * So the claim must come from the agent's own words, or from the tool title cezar itself renders
+ * from the command it saw run. Tool output and tool input are the transcript of the world, not a
+ * statement about this run. The URL is still read from the whole event — `gh` prints it in the
+ * output — because it is the CLAIM that needs a trustworthy source, not the link.
+ */
+function eventCreationClaimFragments(event: Record<string, unknown>): string[] {
+  const fragments: string[] = [];
+  // A `tool-result` event's `result` IS raw command output; on every other event the top-level
+  // text is the agent's own.
+  if (event.type !== 'tool-result') {
+    for (const key of ['text', 'result', 'message'] as const) {
+      const value = event[key];
+      if (typeof value === 'string') fragments.push(value);
+    }
+  }
+  const item = event.item;
+  if (item && typeof item === 'object') {
+    const it = item as Record<string, unknown>;
+    if (it.kind === 'message' && it.role === 'assistant' && typeof it.text === 'string') {
+      fragments.push(it.text);
+    }
+    if (it.kind === 'tool' && typeof it.title === 'string') fragments.push(it.title);
+  }
+  return fragments;
+}
+
 /** Agent-authored event text, matching the trust boundary used by task markers.
  * Tool titles, inputs, and outputs remain visible to the referenced-URL tier,
  * but must never promote an issue into the shared `issueNumber` field (#538). */
@@ -379,6 +451,35 @@ function resolveReferencedRef(candidates: string[], task: string, declared?: num
     return num !== '' && new RegExp(`(?<!\\d)#?${num}(?!\\d)`).test(task);
   });
   return named.length === 1 ? named[0] : undefined;
+}
+
+/** The number a forge URL's last segment names (`…/pull/402` → 402), or undefined. */
+function refUrlNumber(url: string | undefined): number | undefined {
+  if (!url) return undefined;
+  const n = Number(url.split('/').pop());
+  return Number.isInteger(n) && n > 0 && n < MAX_REF ? n : undefined;
+}
+
+/**
+ * The PR declaration the REFERENCED tier is allowed to act on.
+ *
+ * `CEZ:PR=N` means one of two things depending on when the agent writes it: on the way in it
+ * names the PR the task is ABOUT, and once the task has opened a PR of its own the marker
+ * contract asks it to re-declare with the new number ("Re-emit with the new number if the subject
+ * changes (e.g. you open a PR later in the task)"). A declaration naming the PR this run CREATED
+ * is therefore a statement about the CREATED tier, which `pullRequestUrl` already carries — and
+ * feeding it to the referenced tier ERASES the about-PR, because `resolveReferencedRef` clears
+ * the chip when no candidate matches the declared number (a task on #4326 that opened
+ * #5366 dropped from two chips to one the moment it declared #5366).
+ *
+ * Both tiers stay true instead: the created PR is the created PR, and the reference resolves as
+ * if that declaration had not been made — which is exactly what it was before the task opened
+ * anything.
+ */
+function referencedPrDeclaration(run: RunRecord): number | undefined {
+  const declared = run.markerRefs?.pr;
+  if (declared === undefined) return undefined;
+  return declared === refUrlNumber(run.pullRequestUrl) ? undefined : declared;
 }
 
 /**
@@ -442,6 +543,25 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
+  // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
+  // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
+  // could match the created number. The evidence is all still on the record — only the
+  // conclusion drawn from it was wrong — so re-resolve without that declaration instead of
+  // asking for a migration. Deliberately one-directional: it only runs on a record that HAS no
+  // referenced PR, so it can never take one away from a record written by an older cezar whose
+  // candidate list no longer explains it. `prNumber` is not recoverable this way (the
+  // declaration overwrote it) and is left alone — the restored URL is what paints the chip.
+  if (
+    run.referencedPullRequestUrl === undefined &&
+    run.markerRefs?.pr !== undefined &&
+    referencedPrDeclaration(run) === undefined
+  ) {
+    run.referencedPullRequestUrl = resolveReferencedRef(
+      run.referencedPrCandidates ?? [],
+      run.task,
+      undefined,
+    );
+  }
   return run;
 }
 
@@ -494,7 +614,7 @@ export class RunStore extends EventEmitter {
     workflow: string;
     task: string;
     model?: string;
-    runner?: 'claude' | 'codex' | 'opencode';
+    runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
     generateFollowups?: boolean;
@@ -709,11 +829,28 @@ export class RunStore extends EventEmitter {
 
   /** Bulk mark-read: stamp every currently-unread finished run; returns the count.
    *  "Unread" here is the same rule the cockpit paints (`isUnread` in read-state.ts),
-   *  clause for clause: a `done` or `failed` run that finished and has not been seen
-   *  since. Cancelled runs are never unread — you stopped them yourself — and archived
-   *  ones never are either, since archiving is a stronger "done with this" than reading;
-   *  both are skipped, as are runs already read. Keeping the two rules identical is what
-   *  makes the returned count the number the cockpit's unread badge was showing. */
+   *  clause for clause:
+   *   - a `done` or `failed` run that finished and has not been seen since;
+   *   - cancelled runs are never unread — you stopped them yourself;
+   *   - archived ones never are either, since archiving is a stronger "done with this"
+   *     than reading;
+   *   - and a `failed` run with a pending `autoResumeAt` is not a done item AT ALL
+   *     (`isScheduledResume`, spec 2026-08-03-auto-resume-after-usage-limit): it has an
+   *     appointment to pick the work back up, so there is no outcome to have missed.
+   *
+   *  Keeping the two rules identical is what makes the returned count the number the
+   *  cockpit's unread badge was showing. The `autoResumeAt` clause is the one that drifted
+   *  (#803): `isUnread` gained it with auto-resume and this sweep did not, so a task waiting
+   *  out a usage limit was uncounted by the badge but stamped read by the sweep — and this
+   *  comment asserted an invariant the code no longer held.
+   *
+   *  This rule lives in two languages of the same repo, which is why it has now drifted
+   *  once. The cockpit cannot import it (`packages/web` does not depend on the service, and
+   *  should not), so a single definition would have to move to `packages/contract` — the one
+   *  package both sides already import. Worth doing; deliberately not done here, because
+   *  widening the contract package's remit from "shapes" to "behavior" is a design change
+   *  that deserves its own review rather than riding along in a bug fix. Until then: EDIT
+   *  BOTH, and the case-table tests on either side are what catch you if you don't. */
   markAllRead(): number {
     const now = new Date().toISOString();
     let count = 0;
@@ -721,6 +858,7 @@ export class RunStore extends EventEmitter {
       const unread =
         !run.archived &&
         (run.status === 'done' || run.status === 'failed') &&
+        !(run.status === 'failed' && run.autoResumeAt !== undefined) &&
         run.finishedAt !== undefined &&
         (run.seenAt === undefined || run.seenAt < run.finishedAt);
       if (!unread) continue;
@@ -747,15 +885,34 @@ export class RunStore extends EventEmitter {
     // The janitor trick: agents print the PR URL after `gh pr create` — the
     // first one spotted in the transcript becomes the run's PR link. Scans v1
     // fields AND nested v2 `item.*` content (#407). A URL without the created
-    // phrasing still feeds the referenced tier (the PR the task is about).
+    // phrasing still feeds the referenced tier (the PR the task is about) —
+    // and the phrasing itself is only believed from a source that can speak
+    // FOR this run (`eventCreationClaimFragments`), never from quoted output.
     const haystack = eventTextFragments(full).join(' ');
     const agentHaystack = eventAgentTextFragments(full).join(' ');
+    // The creation CLAIM is read from a narrower source than the URL is
+    // (`eventCreationClaimFragments`), which is why the two are searched
+    // together rather than the haystack alone: the phrase must land in the
+    // trusted prefix, and the link may come from anywhere after it.
+    const claim = eventCreationClaimFragments(full).join(' ');
     if (haystack.length > 0) {
       let changed = false;
       if (!run.pullRequestUrl) {
-        const created = createdPrUrl(haystack);
+        const created = CREATED_PR_RE.test(claim) ? createdPrUrl(`${claim} ${haystack}`) : undefined;
         if (created) {
           this.updateRun(runId, { pullRequestUrl: created });
+          // Adopting the created tier can RELEASE a declaration the referenced tier was holding
+          // (see `referencedPrDeclaration`), so re-resolve here too: the about-PR must come back
+          // whether the marker arrived before the creation evidence or after it.
+          const resolved = resolveReferencedRef(
+            run.referencedPrCandidates ?? [],
+            run.task,
+            referencedPrDeclaration(run),
+          );
+          if (resolved !== run.referencedPullRequestUrl) {
+            run.referencedPullRequestUrl = resolved;
+            changed = true;
+          }
         } else if (PR_URL_RE.test(haystack) && this.trackReferencedPrs(run, haystack)) {
           changed = true;
         }
@@ -792,7 +949,7 @@ export class RunStore extends EventEmitter {
     run.referencedPullRequestUrl = resolveReferencedRef(
       run.referencedPrCandidates,
       run.task,
-      run.markerRefs?.pr,
+      referencedPrDeclaration(run),
     );
     return true;
   }
@@ -850,6 +1007,10 @@ export class RunStore extends EventEmitter {
    * against the candidate working set — including down to `undefined` when no
    * candidate matches (a wrong chip is worse than no chip). The created tier
    * (`pullRequestUrl`) is deliberately untouched.
+   *
+   * One declaration is NOT a statement about the referenced tier: the number of the PR this run
+   * itself created. See `referencedPrDeclaration` — the marker contract asks the agent to
+   * re-declare after it opens a PR, and taking that literally cost the task the PR it was about.
    */
   applyMarkerRefs(runId: string, refs: { pr?: number; issue?: number }): RunRecord | undefined {
     const run = this.runs.get(runId);
@@ -859,7 +1020,12 @@ export class RunStore extends EventEmitter {
       ...(refs.pr !== undefined ? { pr: refs.pr } : {}),
       ...(refs.issue !== undefined ? { issue: refs.issue } : {}),
     };
-    if (refs.pr !== undefined) run.prNumber = refs.pr;
+    // `prNumber` is the about-PR as well (it is what paints a numeric-only chip), so a
+    // re-declaration naming the created PR only FILLS it — it never overwrites the number the
+    // task came in with, which is still the PR this task is about.
+    if (refs.pr !== undefined && (run.prNumber === undefined || refs.pr !== refUrlNumber(run.pullRequestUrl))) {
+      run.prNumber = refs.pr;
+    }
     if (refs.issue !== undefined) {
       run.issueNumber = refs.issue;
       delete run.referencedIssueNumberSeeded;
@@ -868,7 +1034,7 @@ export class RunStore extends EventEmitter {
       run.referencedPullRequestUrl = resolveReferencedRef(
         run.referencedPrCandidates ?? [],
         run.task,
-        run.markerRefs.pr,
+        referencedPrDeclaration(run),
       );
     }
     if (run.markerRefs.issue !== undefined) {
