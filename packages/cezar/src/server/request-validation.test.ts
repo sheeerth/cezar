@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager, StartRunInput } from '../workflows/run.ts';
 import type { WorkflowDef } from '../workflows/types.ts';
-import { createRunInputSchema } from '@open-mercato/cezar-contract';
+import { createRunInputSchema, runnerSchema } from '@open-mercato/cezar-contract';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { connectedProviderAuth } from './provider-auth.testkit.ts';
@@ -66,7 +67,7 @@ describe('request validation bounds (#429)', () => {
       body: JSON.stringify(body),
     });
 
-  // ---- createRunInputSchema.task -------------------------------------------------
+  // ---- createRunInputSchema.task -------------------------------------------
   const stepsBody = { steps: [{ id: 'work', prompt: '{{task}}' }] };
 
   it('accepts a 100k-char task', async () => {
@@ -256,6 +257,13 @@ describe('request validation bounds (#429)', () => {
     it('covers both verdicts, so the table cannot pass vacuously', () => {
       const verdicts = new Set(cases.map(([, body]) => createRunInputSchema.safeParse(body).success));
       expect(verdicts).toEqual(new Set([true, false]));
+    });
+
+    // The route used to enumerate runners from the service's own `RUNNER_IDS`; it now trusts the
+    // contract's `runnerSchema`, a second hand-written list. A runner added to one and not the
+    // other would be refused by `POST /runs` (or accepted with no runner behind it) — pin them equal.
+    it("the contract's runner ids are the service's RUNNER_IDS", () => {
+      expect([...runnerSchema.options].sort()).toEqual([...RUNNER_IDS].sort());
     });
   });
 
