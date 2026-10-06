@@ -101,7 +101,7 @@ test('the release tarball serves `cez mcp` against a dry-run cockpit', { timeout
     await execFile('git', ['add', 'README.md'], { cwd: fixtureRepo });
     await execFile('git', ['-c', 'user.name=cezar', '-c', 'user.email=cezar@example.invalid', 'commit', '-m', 'fixture'], { cwd: fixtureRepo });
 
-    const env = { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: join(root, 'cez-home'), CEZ_NO_BANNER: '1' };
+    const env: NodeJS.ProcessEnv = { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: join(root, 'cez-home'), CEZ_NO_BANNER: '1' };
     delete env.CEZ_TASK_ID;
     delete env.CEZ_API_URL;
     const port = await freePort();
