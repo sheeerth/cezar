@@ -23,4 +23,4 @@ Non-goals: any other route's local schema (`messageSchema`, `continueSchema`); b
 
 ### Phase 1: contract de-dup for POST /runs
 
-- [ ] 1.1 Swap the validator to createRunInputSchema and pin agreement with a test
+- [x] 1.1 Swap the validator to createRunInputSchema and pin agreement with a test — 5c5cf5a3
