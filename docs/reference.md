@@ -367,6 +367,52 @@ platform.
 
 ---
 
+## Supervising tasks from an MCP client (`cez mcp`)
+
+`cez mcp` (spec `.ai/specs/2026-10-06-cez-mcp.md`) is an MCP server over stdio
+for an agent **outside** cezar — typically your own Claude Code session — that
+hands work to cezar and supervises it: start a task, wait, read its status, the
+worker's latest output and the diff, then reply, continue or cancel, across any
+of the cockpit's projects. It is a thin client of the running cockpit: no new
+route, no state, nothing to configure.
+
+```json
+{ "mcpServers": { "cezar": { "command": "cez", "args": ["mcp"] } } }
+```
+
+- **Finding the cockpit:** `--url <url>`, then `CEZ_API_URL`, then the first
+  cezar cockpit answering on `127.0.0.1:4321–4370` (`cez serve` moves off a taken
+  port); with several, the one serving the current directory's project wins. No
+  cockpit: the server still starts and every call answers *start it with
+  `cez serve`*.
+- **Default project:** a call without `projectId` targets the registered project
+  containing the current directory, else the cockpit's boot project.
+- **Read-only:** `--read-only` serves only the read tools. Inside a cezar task
+  (`CEZ_TASK_ID` set, or a task worktree) that is **always** the case, however the
+  server was registered: agents in tasks delegate with `cez task`, whose engine
+  enforces the children-in-flight cap and the carved budget. Claude Code forwards
+  its environment to stdio MCP servers (checked with 2.1.280), so a user-level
+  registration is safe.
+- **Results** are capped at 50,000 characters; a route's refusal comes back as a
+  tool error with the route's own message.
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `list_projects` | read | Registered projects; `current` marks the default. |
+| `list_workflows` | read | Workflow names `start_run` accepts. |
+| `list_runs` | read | A project's recent tasks; archived hidden unless asked. |
+| `get_run` | read | Status, `settled`, `needsAnswer`, branch, tokens, cost. |
+| `get_run_messages` | read | The newest conversation items: assistant text, user messages, tool-call summaries, questions, errors. |
+| `get_diff` | read | The task's changes (the Changes tab's base); `path` for one file, `patches: false` for a stat. |
+| `wait_for_runs` | read | Returns when any/all listed tasks settle — waiting, monitoring, review or ended — or after `timeoutS` (≤ 45 s); call again to keep waiting. |
+| `start_run` | write | Start a task (`workflow` defaults to `quick-task`); returns its id at once. |
+| `send_run_message` | write | Message a task's agent. |
+| `continue_run` | write | Reopen a stopped task for another turn. |
+| `cancel_run` | destructive | Stop a task now. |
+| `finish_run` | destructive | Close a task's open session. |
+
+Nothing here merges, pushes, opens a PR or deletes — the review gate stays yours.
+
 ## Coding agent backends
 
 cezar is not married to one vendor. Every agent step runs through a single
