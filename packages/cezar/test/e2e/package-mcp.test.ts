@@ -145,6 +145,8 @@ test('the release tarball serves `cez mcp` against a dry-run cockpit', { timeout
     const run = await call('get_run', { runId: started.id as string });
     assert.equal(run.settled, true);
     await call('get_run_messages', { runId: started.id as string });
+    const diff = await call('get_diff', { runId: started.id as string, patches: false });
+    assert.ok(Array.isArray(diff.files), 'get_diff answers with the task’s files');
 
     assert.deepEqual(client.stray, [], 'stdout carries JSON-RPC only');
   } finally {

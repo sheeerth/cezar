@@ -173,6 +173,9 @@ describe('cez mcp — read tools', () => {
       { seq: 12, ts: 't12', role: 'tool', summary: 'Bash: {"command":"npm test"}' },
       { seq: 13, ts: 't13', role: 'assistant', text: 'which parser?' },
     ]);
+    // Exactly `limit` items with nothing older left: no false "more" signal.
+    expect(out.moreOlder).toBe(false);
+    expect(parse(await client.callTool('get_run_messages', { runId: 'r1', limit: 2 })).moreOlder).toBe(true);
   });
 
   it('get_diff narrows to one file, drops patches on request, and omits patches past the cap', async () => {

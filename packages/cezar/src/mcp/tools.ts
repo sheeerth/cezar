@@ -279,20 +279,25 @@ export const READ_TOOLS: ToolDef[] = [
       let cursor: string | undefined;
       let asOfSeq = 0;
       let hasOlder = false;
+      let leftUnread = false;
       for (let page = 0; page < MAX_HISTORY_PAGES && items.length < want; page++) {
         const body = await ctx.cockpit.get<HistoryPage>(cursor ? `${path}?cursor=${encodeURIComponent(cursor)}` : path, ctx.signal);
         if (page === 0) asOfSeq = body.asOfSeq;
         // Pages run oldest→newest; walk each newest-first so the cap keeps the most recent.
-        for (const event of [...body.events].reverse()) {
-          const item = conversationItem(event);
+        const newestFirst = [...body.events].reverse();
+        for (let i = 0; i < newestFirst.length; i++) {
+          const item = conversationItem(newestFirst[i]!);
           if (item) items.push(item);
-          if (items.length >= want) break;
+          if (items.length >= want) {
+            leftUnread = newestFirst.slice(i + 1).some((event) => conversationItem(event) !== undefined);
+            break;
+          }
         }
         hasOlder = body.hasOlder;
         cursor = body.olderCursor;
         if (!cursor) break;
       }
-      return { projectId: project, runId: id, asOfSeq, items: items.reverse(), moreOlder: hasOlder || items.length >= want };
+      return { projectId: project, runId: id, asOfSeq, items: items.reverse(), moreOlder: hasOlder || leftUnread };
     },
   }),
   tool({
