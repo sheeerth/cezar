@@ -134,6 +134,18 @@ describe('waitForRuns', () => {
     await expect(dead).rejects.toThrow(/stopped answering while waiting .* last known: a: running/);
   });
 
+  it('never outlives its deadline on a read that hangs (the tick is bounded too)', async () => {
+    const started = Date.now();
+    const hung = (_t: WaitTarget, signal: AbortSignal) =>
+      new Promise<{ status: 'running' }>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new CockpitError('cancelled')), { once: true });
+      });
+    const out = await waitForRuns([target('a')], hung, { mode: 'any', timeoutMs: 1, signal: new AbortController().signal });
+    expect(out.timedOut).toBe(true);
+    expect(out.outcomes[0]?.error).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it('stops when the client cancels the call', async () => {
     const controller = new AbortController();
     const clock = fakeClock();

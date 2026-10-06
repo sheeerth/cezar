@@ -38,6 +38,8 @@ export interface WaitOptions {
 }
 
 export const POLL_INTERVAL_MS = 2_000;
+/** The shortest budget a tick's reads get, however little of the wait is left. */
+const MIN_TICK_MS = 1_000;
 
 const abortableSleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
@@ -73,12 +75,18 @@ export async function waitForRuns<R extends { status: RunStatus; activity?: RunA
 
   for (;;) {
     let failed = false;
+    // A tick's reads may not outlive the deadline (a hung cockpit would otherwise add the full
+    // per-request timeout on top of timeoutS and push the call past the client's tool timeout).
+    // The floor gives the first read of a nearly-spent wait a real chance to answer.
+    const tick = AbortSignal.any([options.signal, AbortSignal.timeout(Math.max(deadline - now(), MIN_TICK_MS))]);
     await Promise.all(
       outcomes.map(async (outcome) => {
         try {
-          outcome.run = await read(outcome.target, options.signal);
+          outcome.run = await read(outcome.target, tick);
           delete outcome.error;
         } catch (error) {
+          // Out of time mid-read: keep the last known state, the deadline check below answers.
+          if (tick.aborted && !options.signal.aborted) return;
           const message = error instanceof Error ? error.message : String(error);
           if (message.startsWith('404')) {
             outcome.error = 'not found';
@@ -91,6 +99,7 @@ export async function waitForRuns<R extends { status: RunStatus; activity?: RunA
       }),
     );
     if (options.signal.aborted) throw new WaitCancelled();
+    if (tick.aborted) return { timedOut: true, outcomes };
     failingTicks = failed ? failingTicks + 1 : 0;
     if (failingTicks >= 2) {
       const last = outcomes.map((o) => `${o.target.runId}: ${o.run?.status ?? 'unknown'}`).join(', ');
