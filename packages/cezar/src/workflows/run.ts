@@ -5300,7 +5300,11 @@ export class RunManager {
       const diff = await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD');
       const hasDiff = diff.trim().length > 0 && !diff.startsWith('(diff failed');
       const config = await loadConfig(this.repoRoot);
-      review = hasDiff && reviewGateEnabled(config) && run.autonomous !== true;
+      // Autonomous runs skip the gate (#489) — except a task another task CREATED in this project
+      // (`waitedBy`, spec 2026-10-05-cross-task-waits): its autonomy was chosen by the creating
+      // agent, not by the user, and unlike a dispatch child nobody merges it — its own PR is the
+      // only way its work lands, so a user who turned the gate on still gets to look first.
+      review = hasDiff && reviewGateEnabled(config) && (run.autonomous !== true || run.waitedBy !== undefined);
     }
     this.store.updateRun(runId, {
       status: review ? 'review' : 'done',

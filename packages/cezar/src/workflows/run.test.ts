@@ -726,6 +726,21 @@ describe('RunManager.settleSuccess — optional review gate', () => {
     return store.getRun(record.id) as RunRecord;
   }
 
+  it('gate on + autonomous task CREATED by another task (waitedBy) + changes → review (cross-task waits)', async () => {
+    process.env.CEZ_REVIEW_GATE = '1';
+    const record = await changedRun(true);
+    store.updateRun(record.id, { waitedBy: { projectId: 'other', runId: 'creator-run' } });
+    await settle(record.id);
+    expect(store.getRun(record.id)?.status).toBe('review');
+  });
+
+  it('gate off + autonomous created task + changes → done (the gate stays opt-in)', async () => {
+    const record = await changedRun(true);
+    store.updateRun(record.id, { waitedBy: { projectId: 'other', runId: 'creator-run' } });
+    await settle(record.id);
+    expect(store.getRun(record.id)?.status).toBe('done');
+  });
+
   /** A fresh run + worktree with no changes vs main (empty diff). */
   async function cleanRun(): Promise<RunRecord> {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });

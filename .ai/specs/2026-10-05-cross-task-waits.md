@@ -56,7 +56,9 @@ resolver** that listens to every project store's terminal transitions.
    written and the CLI prints "waiting — end your turn; you will be woken when it settles".
 2. **Create and wait** — `cez task create "<objective>" --project <projectId> …` creates an
    independent, autonomous root task in that project (its own worktree off that project's base
-   branch, its own review gate) and attaches a wait edge to the creator in the same request.
+   branch, its own review gate — honored even though the task is autonomous: autonomy exempts a
+   run from the optional `CEZ_REVIEW_GATE` (#489), but this one's autonomy was the creating agent's
+   choice and nothing merges it but its own PR) and attaches a wait edge to the creator in the same request.
 3. **Park** — at turn end, a run with any pending edge parks as a monitor with the same uncapped
    slot exemption a dispatch parent gets, and no periodic monitoring nudge (the edge is the wake
    source; polling would be the very cost this feature removes).
@@ -349,7 +351,7 @@ was approved for; its step adds the AGENTS.md § Zero config owner-approved exce
 
 11. **Contract** `create` branch of `waitInputSchema`; `RunRecord.waitedBy`.
 12. **Create path.** Route builds the target context, starts an autonomous root task through the
-    target manager's `startRun` (base branch, review gate), writes the edge atomically after the
+    target manager's `startRun` (base branch; `settleSuccess` keeps the review gate for a `waitedBy` run despite `autonomous`), writes the edge atomically after the
     start succeeds. Counts toward the creator's in-flight cap. Tests: success, target start failure
     leaves no edge, cap refusal.
 13. **Budget.** Require `--budget` when the creator has a dispatch budget; extend
