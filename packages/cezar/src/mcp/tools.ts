@@ -9,10 +9,10 @@
  */
 import { z } from 'zod';
 import type { ToolAnnotations } from '@modelcontextprotocol/server';
-import { changesPayloadSchema, runStatusSchema, type RunRecord } from '@open-mercato/cezar-contract';
+import { changesPayloadSchema, createRunInputBaseSchema, runStatusSchema, type RunRecord } from '@open-mercato/cezar-contract';
 import { Cockpit, CockpitError } from './cockpit.ts';
 import { matchProject, projectScope } from './projects.ts';
-import { isSettled } from './wait.ts';
+import { isSettled, waitForRuns, type WaitTarget } from './wait.ts';
 
 export type ToolKind = 'read' | 'write' | 'destructive';
 
@@ -335,7 +335,122 @@ export const READ_TOOLS: ToolDef[] = [
   }),
 ];
 
-export const ALL_TOOLS: ToolDef[] = [...READ_TOOLS];
+/** `wait_for_runs` is read-only, but it is the loop's other half, so it lives with the writers. */
+export const WAIT_TOOL: ToolDef = tool({
+  name: 'wait_for_runs',
+  title: 'Wait for tasks',
+  description:
+    'Wait until one task (mode any, the default) or all of them (mode all) settles — waiting for an answer, monitoring, in review, done, failed or cancelled — or until timeoutS passes (at most 45 s). It always returns within that time with every task’s current state; if timedOut is true and you still want to wait, call it again.',
+  kind: 'read',
+  input: z.object({
+    runs: z
+      .array(z.object({ runId, projectId }))
+      .min(1)
+      .max(8)
+      .describe('The tasks to watch; each may name its own project.'),
+    mode: z.enum(['any', 'all']).optional(),
+    timeoutS: z.number().int().min(1).max(45).optional().describe('Seconds before returning anyway (default 40, max 45).'),
+  }),
+  async handler({ runs, mode, timeoutS }, ctx) {
+    let fallback: string | undefined;
+    const targets: WaitTarget[] = [];
+    for (const r of runs) {
+      fallback ??= r.projectId ? undefined : await resolveProject(ctx, undefined);
+      targets.push({ runId: r.runId, projectId: r.projectId ?? fallback! });
+    }
+    const { timedOut, outcomes } = await waitForRuns(targets, (t, signal) => fetchRun(ctx, t.projectId, t.runId, signal), {
+      mode: mode ?? 'any',
+      timeoutMs: (timeoutS ?? 40) * 1_000,
+      signal: ctx.signal,
+    });
+    return {
+      timedOut,
+      runs: outcomes.map((o) =>
+        o.run
+          ? { projectId: o.target.projectId, ...runProjection(o.run), ...(o.error ? { error: o.error } : {}) }
+          : { projectId: o.target.projectId, id: o.target.runId, settled: o.error === 'not found', error: o.error ?? 'unknown' },
+      ),
+    };
+  },
+});
+
+/** start_run's body: the contract's own fields, picked — so what the tool advertises is what
+ *  `POST /runs` validates. `workflow` is optional HERE because the route needs exactly one of
+ *  workflow/steps and this tool never sends steps: it fills in `quick-task`. */
+const startRunInput = createRunInputBaseSchema
+  .pick({ task: true, workflow: true, runner: true, model: true, agentProfile: true })
+  .extend({ projectId });
+
+export const WRITE_TOOLS: ToolDef[] = [
+  tool({
+    name: 'start_run',
+    title: 'Start a task',
+    description:
+      'Start a cezar task: an agent works on `task` in its own git worktree and branch and stops at the review gate (it never merges). Returns the task id immediately — follow it with wait_for_runs. workflow defaults to quick-task (see list_workflows); runner/model pick the agent backend.',
+    kind: 'write',
+    input: startRunInput,
+    async handler({ projectId: explicit, workflow, ...rest }, ctx) {
+      const project = await resolveProject(ctx, explicit);
+      const run = await ctx.cockpit.post<RunRecord>(`${projectScope(project)}/runs`, { ...rest, workflow: workflow ?? 'quick-task' }, ctx.signal);
+      return { projectId: project, id: run.id, title: run.title, status: run.status, ...(run.branch ? { branch: run.branch } : {}) };
+    },
+  }),
+  tool({
+    name: 'send_run_message',
+    title: 'Message a task',
+    description:
+      'Send a message to a task’s agent — an answer to its question, a correction, more instructions. A live session gets it now; a queued task gets it folded into its prompt. To reopen a finished task, use continue_run.',
+    kind: 'write',
+    input: z.object({ projectId, runId, text: z.string().trim().min(1).max(100_000) }),
+    async handler({ projectId: explicit, runId: id, text }, ctx) {
+      const project = await resolveProject(ctx, explicit);
+      const body = await ctx.cockpit.post<Record<string, unknown>>(`${projectScope(project)}/runs/${encodeURIComponent(id)}/messages`, { text }, ctx.signal);
+      return { projectId: project, runId: id, ...body };
+    },
+  }),
+  tool({
+    name: 'continue_run',
+    title: 'Continue a task',
+    description: 'Reopen a task that stopped (review, done, failed, cancelled) for another turn, optionally with new instructions in text.',
+    kind: 'write',
+    input: z.object({ projectId, runId, text: z.string().max(100_000).optional() }),
+    async handler({ projectId: explicit, runId: id, text }, ctx) {
+      const project = await resolveProject(ctx, explicit);
+      const body = await ctx.cockpit.post<Record<string, unknown>>(
+        `${projectScope(project)}/runs/${encodeURIComponent(id)}/continue`,
+        text ? { text } : {},
+        ctx.signal,
+      );
+      return { projectId: project, runId: id, ...body };
+    },
+  }),
+  tool({
+    name: 'cancel_run',
+    title: 'Cancel a task',
+    description: 'Stop a task’s agent now. The worktree and branch stay; the task ends cancelled.',
+    kind: 'destructive',
+    input: z.object({ projectId, runId }),
+    async handler({ projectId: explicit, runId: id }, ctx) {
+      const project = await resolveProject(ctx, explicit);
+      const body = await ctx.cockpit.post<Record<string, unknown>>(`${projectScope(project)}/runs/${encodeURIComponent(id)}/cancel`, {}, ctx.signal);
+      return { projectId: project, runId: id, ...body };
+    },
+  }),
+  tool({
+    name: 'finish_run',
+    title: 'Finish a task',
+    description: 'Close a task’s open agent session and settle it as finished — use it when the work is accepted and the agent should stop listening.',
+    kind: 'destructive',
+    input: z.object({ projectId, runId }),
+    async handler({ projectId: explicit, runId: id }, ctx) {
+      const project = await resolveProject(ctx, explicit);
+      const body = await ctx.cockpit.post<Record<string, unknown>>(`${projectScope(project)}/runs/${encodeURIComponent(id)}/finish`, {}, ctx.signal);
+      return { projectId: project, runId: id, ...body };
+    },
+  }),
+];
+
+export const ALL_TOOLS: ToolDef[] = [...READ_TOOLS, WAIT_TOOL, ...WRITE_TOOLS];
 
 /** The tools a server registers: everything, or only `read` when it must not mutate. */
 export function selectTools(readOnly: boolean, tools: readonly ToolDef[] = ALL_TOOLS): ToolDef[] {

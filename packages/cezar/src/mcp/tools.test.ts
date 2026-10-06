@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ALL_TOOLS, READ_TOOLS, RESULT_CHAR_CAP, conversationItem } from './tools.ts';
+import { ALL_TOOLS, RESULT_CHAR_CAP, conversationItem } from './tools.ts';
 import { connectMcp, fakeCockpit, type McpTestClient } from './mcp.testkit.ts';
 
 const RUN = {
@@ -24,7 +24,7 @@ afterEach(async () => {
   client = undefined;
 });
 
-const readNames = READ_TOOLS.map((t) => t.name).sort();
+const readNames = ALL_TOOLS.filter((t) => t.kind === 'read').map((t) => t.name).sort();
 const parse = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0]!.text) as Record<string, unknown>;
 
 describe('cez mcp — the tool surface', () => {
