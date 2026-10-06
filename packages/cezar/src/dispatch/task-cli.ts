@@ -9,6 +9,7 @@
  * set the same three and use it too. No server, no dispatch: the command says so and exits 2.
  */
 import { parseArgs } from 'node:util';
+import { projectsResponseSchema, type ProjectsResponse } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 export interface TaskCliEnv {
@@ -37,6 +38,7 @@ const USAGE = `cez task — dispatch cezar tasks from inside a task (on by defau
   cez task wait [<projectId>/]<runId> [--timeout <minutes>]
                                       wait for another task (a bare id means this project; 8 chars do)
   cez task waits                      this task's waits and their state
+  cez task projects                   the projects this cockpit can address with --project (current one marked)
   cez task list                       the tree this task belongs to, with status and cost
   cez task tree <run id>              the tree rooted at (or containing) another run`;
 
@@ -126,6 +128,27 @@ async function printDeclared(response: Response, io: TaskCliIo, what: string): P
   io.log(`${edge.created ? 'created and ' : ''}waiting for "${edge.targetTitle}" (${edge.target.projectId}/${edge.target.runId.slice(0, 8)}) until ${edge.deadline}.`);
   io.log('End your turn now: cezar parks this task without holding a slot and wakes it with the outcome when that task settles. Do not poll it.');
   return 0;
+}
+
+/**
+ * `cez task projects` (#1303): the registry as THIS cockpit serves it, so an id taken from it is
+ * exactly what `create --project` resolves against. `current` is the run's own project, falling
+ * back to the boot project (an unscoped CLI talks to it; `default` is its reserved alias).
+ */
+export function printProjects(registry: ProjectsResponse, current: string | undefined, io: Pick<TaskCliIo, 'log'>): void {
+  const here = !current || current === 'default' ? registry.bootProject : current;
+  if (registry.projects.length === 0) {
+    io.log('no registered projects — only this one can be addressed');
+    return;
+  }
+  const width = Math.max(...registry.projects.map((project) => project.id.length));
+  for (const project of registry.projects) {
+    const mark = project.id === here ? '*' : ' ';
+    const tags = project.tags?.length ? `  [${project.tags.join(', ')}]` : '';
+    const status = project.status === 'missing' ? 'missing — unusable, its folder is gone' : project.status;
+    io.log(`${mark} ${project.id.padEnd(width)}  "${project.name}"  ${status}${tags}${project.id === here ? '  (this project)' : ''}`);
+  }
+  io.log('Pass an id as --project <id> to cez task create, or as <id>/<runId> to cez task wait.');
 }
 
 function number(value: string | undefined, name: string): number | undefined {
@@ -301,6 +324,16 @@ export async function runTaskCommand(
           return 0;
         }
         for (const edge of edges) io.log(edgeLine(edge));
+        return 0;
+      }
+      case 'projects': {
+        if (rest.length) throw new Error('cez task projects takes no arguments');
+        // Workspace-level route: never `api.scope` — a project-prefixed `/projects` does not exist.
+        const response = await io.fetch(`${api.url}/api/v1/projects`);
+        if (!response.ok) throw new Error(`could not list projects — ${await readError(response)}`);
+        const parsed = projectsResponseSchema.safeParse(await response.json());
+        if (!parsed.success) throw new Error('could not list projects — the cockpit answered an unexpected shape');
+        printProjects(parsed.data, env.CEZ_PROJECT_ID, io);
         return 0;
       }
       case 'list':
