@@ -160,6 +160,74 @@ describe('cez task', () => {
     expect(none.out[0]).toBe('this task waits for nothing');
   });
 
+  // #1303: the discovery half of create --project — ids come from the cockpit's own registry.
+  const registry = {
+    bootProject: 'web',
+    projectsDir: '/home/u/cezar/projects',
+    projects: [
+      { id: 'web', name: 'Web app', root: '/r/web', addedAt: 't', lastOpenedAt: 't', source: 'local', status: 'ok', tags: ['storefront'] },
+      { id: 'proj', name: 'API', root: '/r/api', addedAt: 't', lastOpenedAt: 't', source: 'local', status: 'ok', tags: ['backend', 'storefront'] },
+      { id: 'gone', name: 'Old repo', root: '/r/gone', addedAt: 't', lastOpenedAt: 't', source: 'checkout', status: 'missing' },
+    ],
+  };
+
+  it('projects reads the workspace-level registry and marks the current project', async () => {
+    const h = harness({ status: 200, body: registry });
+    expect(await runTaskCommand(['projects'], env, h.io)).toBe(0);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/projects');
+    expect(h.calls[0]?.init?.method ?? 'GET').toBe('GET');
+    const rows = h.out.slice(0, 3);
+    expect(rows[0]).toBe('  web   "Web app"  ok  [storefront]');
+    expect(rows[1]).toBe('* proj  "API"  ok  [backend, storefront]  (this project)');
+    expect(rows[2]).toBe('  gone  "Old repo"  missing — unusable, its folder is gone');
+    expect(h.out.join('\n')).toContain('--project <id>');
+    expect(h.err).toHaveLength(0);
+  });
+
+  it('projects shows a missing project as unusable instead of failing', async () => {
+    const h = harness({ status: 200, body: registry });
+    expect(await runTaskCommand(['projects'], env, h.io)).toBe(0);
+    const gone = h.out.find((line) => line.includes('gone'));
+    expect(gone).toContain('missing — unusable');
+    expect(gone).not.toContain('(this project)');
+  });
+
+  it('projects marks the boot project without a project id, and needs no task id', async () => {
+    const h = harness({ status: 200, body: registry });
+    expect(await runTaskCommand(['projects'], { CEZ_API_URL: 'http://127.0.0.1:1' }, h.io)).toBe(0);
+    expect(h.calls[0]?.url).toBe('http://127.0.0.1:1/api/v1/projects');
+    expect(h.out.find((line) => line.includes('(this project)'))).toContain('web');
+    const alias = harness({ status: 200, body: registry });
+    await runTaskCommand(['projects'], { CEZ_API_URL: 'http://127.0.0.1:1', CEZ_PROJECT_ID: 'default' }, alias.io);
+    expect(alias.out.find((line) => line.includes('(this project)'))).toContain('web');
+  });
+
+  it('projects without a cockpit answers the no-cockpit message with exit 2', async () => {
+    const h = harness({ status: 200, body: registry });
+    expect(await runTaskCommand(['projects'], {}, h.io)).toBe(2);
+    expect(h.err[0]).toContain('CEZ_API_URL is not set');
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('projects refuses an unexpected answer with exit 1, and is in the usage text', async () => {
+    const bad = harness({ status: 200, body: { projects: 'nope' } });
+    expect(await runTaskCommand(['projects'], env, bad.io)).toBe(1);
+    expect(bad.err[0]).toContain('could not list projects');
+    const refused = harness({ status: 500, body: { error: 'boom' } });
+    expect(await runTaskCommand(['projects'], env, refused.io)).toBe(1);
+    expect(refused.err[0]).toContain('boom');
+    const help = harness({ status: 200, body: {} });
+    await runTaskCommand(['help'], env, help.io);
+    expect(help.out[0]).toContain('cez task projects');
+  });
+
+  it('projects with an empty registry says so', async () => {
+    const h = harness({ status: 200, body: { ...registry, projects: [] } });
+    expect(await runTaskCommand(['projects'], env, h.io)).toBe(0);
+    expect(h.out[0]).toContain('no registered projects');
+  });
+
   it('create --project posts a create-and-wait to the waits route, not a dispatch', async () => {
     const edge = { id: 'w1', target: { projectId: 'api', runId: 'newrun1234' }, targetTitle: 'Add export', origin: 'agent', created: true, deadline: 'd', state: 'pending', createdAt: 'x' };
     const h = harness({ status: 200, body: { kind: 'pending', edge } });

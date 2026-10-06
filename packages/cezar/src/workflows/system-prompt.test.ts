@@ -274,10 +274,12 @@ describe('systemPrompt end-to-end (dry run)', () => {
       expect(alone).toContain('node "$CEZ_BIN" task');
       expect(alone).not.toContain('--project');
       expect(alone).not.toContain('cez task create');
+      expect(alone).not.toContain('cez task projects');
       delete process.env.CEZ_DISPATCH;
       await runToEnd({ task: 'do the thing mock:done' });
       const withDispatch = capturedSystemPrompt();
       expect(withDispatch).toContain('cez task create "<objective>" --project <projectId>');
+      expect(withDispatch).toContain('with: cez task projects');
       expect(withDispatch).toContain('cez task wait <projectId>/<runId>');
     } finally {
       process.env.CEZ_DISPATCH = '0';

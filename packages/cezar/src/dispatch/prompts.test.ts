@@ -106,6 +106,13 @@ describe('the waits paragraph (spec 2026-10-05-cross-task-waits)', () => {
     expect(text).toContain('At most 4 at once');
   });
 
+  it('points at cez task projects only where create --project is offered (#1303)', () => {
+    expect(waitsPrompt({ create: true, standalone: false })).toContain('with: cez task projects');
+    expect(waitsPrompt({ create: true, standalone: true })).toContain('with: cez task projects');
+    expect(waitsPrompt({ create: false, standalone: true })).not.toContain('cez task projects');
+    expect(waitsPrompt({ create: false, standalone: false })).not.toContain('cez task projects');
+  });
+
   it('offers every runner on create --project, derived like the dispatch prompt (#1236)', () => {
     const createLine = waitsPrompt({ create: true, standalone: false })
       .split('\n')

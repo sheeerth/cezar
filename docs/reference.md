@@ -150,6 +150,14 @@ cezar projects tag api storefront backend   # set the grouping tags (no tags cle
 These read and write `~/.cezar/config.json` directly, so they work with the
 server stopped, and `CEZ_HOME` selects which workspace they operate on.
 
+**From inside a task** — an agent that wants to hand work to another repo
+(`cez task create "…" --project <id>`) finds the ids with `cez task projects`:
+id, name, tags and status of every project the running cockpit serves, with the
+task's own project marked. It asks the cockpit (`GET /api/v1/projects`) rather
+than reading the registry file, so the ids are the ones `--project` resolves
+against; a `missing` project is listed as unusable. Without a cockpit
+(`CEZ_API_URL` unset) it exits 2 like every `cez task` command.
+
 Settings split along the same line: **General** (the project's folder, its
 registry facts, its parallel-task ceiling, and Remove), **Agents**,
 **Worktrees**, **Bookmarklets**, **Prompt templates** and **MCP** describe one

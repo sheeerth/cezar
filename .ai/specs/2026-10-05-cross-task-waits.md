@@ -235,7 +235,14 @@ when the capability is off):
 cez task wait <projectId/>runId [--timeout <min>]   declare; prints outcome if already settled
 cez task waits                                     this task's edges and their state
 cez task create "<objective>" --project <projectId> [--title …] [--budget <usd>] [--runner …] [--model …] [--timeout <min>]
+cez task projects                                  the registered projects (id, name, tags, status), current one marked (#1303)
 ```
+
+`cez task projects` is the discovery half of Q7's `<projectId>/<runId>` addressing (#1303): a thin
+read of the existing workspace-level `GET /api/v1/projects` on the same cockpit `create --project`
+resolves against, so every id it prints is a valid target. A `missing` project is listed as
+unusable rather than failing the command. The waits paragraph points at it only when it also
+offers `create --project`.
 
 **Env:** `CEZ_TASK_WAITS` — default on, `0` disables routes, CLI, prompt paragraph, resolver and
 cockpit affordances. Documented in `.env.example` and `docs/reference.md` in the same commit.
