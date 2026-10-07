@@ -31,13 +31,13 @@ slice). These are the questions it left open, answered with the most reversible 
 | A3 | Where is the group/phase computed, and does the phase enum go into the contract? | Client-side, in a pure, Node-free `packages/web/src/lib/task-phases.ts`, on top of the existing `taskReferences()` rule. The phase enum and group-key type live **in that module** until a route carries them (slice 2's stored phase, or phase in `cez mcp` after fork PR #8) — then they move to `packages/contract` as zod schemas. No new route in slice 1. | The reference rule (#407, #526, #945) already lives client-side and `runIndexEntrySchema`'s comment forbids a second server-side copy. AGENTS.md defines the contract as HTTP shapes, and nothing in slice 1 sends a phase over HTTP. | reversible |
 | A4 | How does a Jira/Linear task join a group when runs carry only GitHub numbers? | Expose the tracker provenance runs **already persist** (`automationTracker.{provider,key,url}`, server-only today) on the wire as a display-only `trackerRef`. A group key falls back PR → GitHub issue → tracker item. Tasks started by hand from the Tracker tab carry no such record and land in "No PR/issue" in this slice. | Honours the brief's "no new persisted state". Recording a tracker ref for hand-launched tasks needs a new persisted field and a `POST /runs` input — named as the first follow-up instead of slipped in here. | reversible |
 | A5 | Where do GitHub labels come from? | The batched `GET /github/ref-status` query adds `labels(first: 20) { nodes { name } }` on the node it already fetches, answered as an optional `labels` map. | Same GraphQL node, no extra request; optional on the wire, so an older server simply omits it. | reversible |
-| A6 | Where do Jira/Linear status and labels come from, and is that new network traffic acceptable by default? | The existing `GET /tracker/:id` read, one cached query per distinct `trackerRef` key in the list, capped at 20 per project, sent with `expectedScope` so a ref from another source or connection is refused (`source_changed`) rather than read. It runs **only when the project has a tracker connection configured** (the user's explicit act in Settings), with `staleTime` 10 min, no polling and no refetch on focus. Any failure is "no tracker signal", never an error. | The provider-neutral seam (`trackerItemSchema.status`/`labels`) is the only way the brief's Jira/Linear requirement is met. AGENTS.md § Zero config asks that features widening network use be opt-in behind a `CEZ_*` flag. This default treats a configured connection as that opt-in instead of adding a flag. That is a reading of a repository rule, so the owner should confirm it. The fallback is cheap: gate Step 10 behind an off-by-default `CEZ_TASK_PHASE_TRACKER=1` (documented in `.env.example`). | ⚠ NEEDS HUMAN CONFIRMATION |
+| A6 | Where do Jira/Linear status and labels come from, and is that new network traffic acceptable by default? | The existing `GET /tracker/:id` read, one cached query per distinct `trackerRef` key in the list, capped at 20 per project, sent with `expectedScope` so a ref from another source or connection is refused (`source_changed`) rather than read. It runs **only when the project has a tracker connection configured** (the user's explicit act in Settings), with `staleTime` 10 min, no polling and no refetch on focus. Any failure is "no tracker signal", never an error. | The provider-neutral seam (`trackerItemSchema.status`/`labels`) is the only way the brief's Jira/Linear requirement is met. AGENTS.md § Zero config asks that features widening network use be opt-in behind a `CEZ_*` flag. This default treats a configured connection as that opt-in instead of adding a flag. Owner-confirmed (2026-10-07): a configured connection is the opt-in; no `CEZ_*` flag. | ✅ confirmed by owner |
 | A7 | What decides "plan" from tasks, with no tags on tasks? | A fixed in-code hint list (`spec`, `plan`, `brainstorm`, `design`, `shape`) matched against the workflow name, the step skill names and the task prompt's leading `/skill`; dispatch `kind: implement`/`review` map directly. | No config in v1 (brief); the list is small, tested as a table, and easy to widen once a week of use shows misses. | reversible |
 | A8 | Does a forge PR closed without merging, or a GitHub issue closed as not-planned, set a phase? | No — it yields no layer-1 signal and the next layer decides. (Tracker *status* words are layer 2 and have their own vocabulary below.) | The brief fixes four phases; inventing "abandoned" would be a fifth. | reversible |
 | A9 | Which tasks feed a group's task-layer signals — the visible view or all of them? | **All** tasks of the group, active and archived alike; the Active/Archived view only decides which rows are painted. | A PR's phase must not change with the tab the user is on; the plan-only override in layer 1 reads the same set. | reversible |
 
-Only A6 needs human confirmation. It keeps this PR a draft until the owner decides whether
-reading a configured tracker counts as the opt-in. The other answers weaken neither security nor
+A6 was confirmed by the owner on 2026-10-07: a configured tracker connection is the opt-in for
+the tracker reads, and no `CEZ_*` flag is added. The other answers weaken neither security nor
 data scoping, and each one is a code-local choice that touches no compatibility surface beyond
 additive optional fields.
 
@@ -283,11 +283,10 @@ placeholder data (no current-app screenshots: see the PR's validation notes).
 - **Wrong defaults.** The phase is a heuristic; the brief accepts that and schedules a week of
   use before deciding on slice 2. `source` on every badge is the mitigation: a wrong phase is
   explainable on sight.
-- **Network use (A6, ⚠).** Phase 4's tracker reads are new automatic requests to a vendor the
-  user connected. Bounded (20 keys per project, 10-minute cache, no polling), but AGENTS.md
-  § Zero config is explicit about opt-in for widened network use; the owner decides between
-  "a configured connection is the opt-in" and an off-by-default `CEZ_TASK_PHASE_TRACKER` flag.
-  Phases 1–3 and Step 8 add no request at all.
+- **Network use (A6, owner-confirmed).** Phase 4's tracker reads are new automatic requests to
+  a vendor the user connected, bounded (20 keys per project, 10-minute cache, no polling). The
+  owner ratified (2026-10-07) that configuring the connection is the opt-in AGENTS.md § Zero
+  config asks for. Phases 1–3 and Step 8 add no request at all.
 - **Hard to reverse:** only the two optional wire fields and the `localStorage` key. Rollback is
   deleting the mode toggle; old servers and old cockpits keep working because both fields are
   optional and ignored when absent.
@@ -296,8 +295,7 @@ placeholder data (no current-app screenshots: see the PR's validation notes).
 - **Overlap with fork PR #3** (Tasks page filters, `routes/tasks-overview.tsx`): Phase 3 below
   touches the same file. Rebase onto #3 if it merges first; the phase filter reuses its facet
   pattern rather than inventing another.
-- **Repository rules:** no config key; no new `CEZ_*` variable unless the owner picks the flag
-  for A6 (then `.env.example` and `docs/reference.md` change in the same commit).
+- **Repository rules:** no config key and no new `CEZ_*` variable.
 
 ## 📋 Phasing
 
@@ -309,7 +307,7 @@ Two pull requests, because they carry different risk:
   - **Phase 2 — sidebar mode.** Toggle + grouped quick-list.
   - **Phase 3 — Tasks page mode + phase filter.**
 - **PR B — richer signals (Phase 4).** GitHub labels on `ref-status` (no extra request), the
-  `trackerRef` projection, and tracker item reads (A6 — gated on the owner's decision). Only
+  `trackerRef` projection, and tracker item reads (A6, owner-confirmed). Only
   sharpens phases PR A already shows; can wait for, or be cut by, the week-of-use decision.
 
 Each phase leaves the app working; the default mode (`attention`) is unchanged throughout.
@@ -368,8 +366,8 @@ for the lists it touches.
    spread `trackerRef` from `automationTracker` conditionally; `groupKeyOf` falls back to it
    after GitHub references. Test: parity in both directions; a record without
    `automationTracker` emits no `trackerRef` key.
-10. `useTrackerItemSignals` over `GET /tracker/:id`, gated per the owner's A6 decision: only with
-    a configured connection (and, if chosen, `CEZ_TASK_PHASE_TRACKER=1`), `expectedScope` set to
+10. `useTrackerItemSignals` over `GET /tracker/:id`, gated per A6: only with a configured
+    connection, `expectedScope` set to
     the association's `trackerReadScope`, cap 20 keys per project. Test: `not_configured`,
     `unauthorized`, `rate_limited` and `source_changed` answers → no signal and no throw; no
     request is made without a connection.
