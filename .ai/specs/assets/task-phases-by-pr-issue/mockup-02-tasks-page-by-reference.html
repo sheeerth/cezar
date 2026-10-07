@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mockup — Tasks page, By PR/issue</title>
+<style>
+  :root{--bg:#111214;--panel:#17181b;--line:#26282d;--fg:#e6e7ea;--soft:#8b8f98;--success:#3fb27f;--pending:#e0a43a;--danger:#e5534b;--violet:#a371f7;--info:#4c8dff}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 -apple-system,Inter,Segoe UI,sans-serif;padding:20px;width:1040px}
+  h1{font-size:18px;margin:0 0 12px}
+  .bar{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+  .tab{padding:3px 10px;border-radius:6px;color:var(--soft)} .tab.on{background:#23252a;color:var(--fg)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-left:8px}
+  .seg span{padding:3px 9px;color:var(--soft)} .seg span.on{background:#2b2e35;color:var(--fg)}
+  .search{margin-left:auto;border:1px solid var(--line);border-radius:6px;padding:4px 10px;color:var(--soft);width:240px}
+  .filters{display:flex;gap:6px;margin:6px 0 14px}
+  .f{border:1px solid var(--line);border-radius:999px;padding:2px 10px;color:var(--soft);font-size:12px} .f.on{background:#2b2e35;color:var(--fg);border-color:#3a3d44}
+  .f b{color:var(--fg);font-weight:600;margin-left:4px}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th{font-weight:500;text-align:left;color:var(--soft);font-size:12px;padding:7px 10px;border-bottom:1px solid var(--line)}
+  td{padding:6px 10px;border-bottom:1px solid #1e2024}
+  tr.gh td{background:#1b1d21;padding:7px 10px}
+  .phase{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:4px;border:1px solid;margin-right:8px}
+  .p-plan{color:var(--soft);border-color:#3a3d44} .p-impl{color:var(--pending);border-color:#5a4520} .p-rev{color:var(--violet);border-color:#4a3570} .p-del{color:var(--success);border-color:#215a40}
+  .chip{font-family:ui-monospace,monospace;font-size:11.5px;color:var(--info);margin-right:8px}
+  .src{color:var(--soft);font-size:11.5px;margin-left:10px}
+  .cnt{float:right;color:var(--soft);font-size:12px}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px} .d-danger{background:var(--danger)} .d-pending{background:var(--pending)} .d-success{background:var(--success)} .d-violet{background:var(--violet)} .d-neutral{background:#555}
+  .ind{padding-left:28px} .ind2{padding-left:46px} .soft{color:var(--soft)} .kind{font-size:10px;color:var(--soft);border:1px solid var(--line);border-radius:4px;padding:0 4px;margin-right:6px}
+  .caption{color:var(--soft);font-size:12px;margin-top:10px}
+</style></head><body>
+<h1>Tasks</h1>
+<div class="bar"><span class="tab on">Active 12</span><span class="tab">Archived</span>
+  <div class="seg" role="radiogroup"><span>Attention</span><span class="on">By PR/issue</span></div>
+  <span class="search">Search title, branch, #PR…</span></div>
+<div class="filters" role="group" aria-label="Filter by phase">
+  <span class="f on">All<b>6</b></span><span class="f">Plan<b>1</b></span><span class="f">Implement<b>2</b></span><span class="f">Review<b>1</b></span><span class="f">Delivery<b>1</b></span><span class="f">No PR/issue<b>1</b></span>
+</div>
+<table>
+  <thead><tr><th style="width:46%">Task</th><th>Status</th><th>Workflow</th><th>Branch</th><th>Age</th><th>Cost</th></tr></thead>
+  <tbody>
+    <tr class="gh"><td colspan="6"><span class="phase p-rev">Review</span><span class="chip">PR #42</span>Task phases by PR/issue<span class="src">from PR #42 · review-required</span><span class="cnt"><span class="dot d-danger"></span>3 tasks · 1 needs you · 1 working</span></td></tr>
+    <tr><td class="ind"><span class="dot d-danger"></span>Implement task phases, slice 1</td><td>waiting</td><td class="soft">quick-task</td><td class="soft">cez/1a2b3c4d</td><td class="soft">25m</td><td class="soft">$1.84</td></tr>
+    <tr><td class="ind2"><span class="kind">review</span><span class="dot d-pending"></span>Review #42</td><td>running</td><td class="soft">quick-task</td><td class="soft">cez/5e6f7a8b</td><td class="soft">2m</td><td class="soft">$0.21</td></tr>
+    <tr><td class="ind"><span class="dot d-success"></span>Spec: task phases</td><td>done</td><td class="soft">quick-task</td><td class="soft">spec/task-phases</td><td class="soft">1h</td><td class="soft">$0.97</td></tr>
+
+    <tr class="gh"><td colspan="6"><span class="phase p-impl">Implement</span><span class="chip">PR #38</span>Usage monitor<span class="src">from PR #38 · draft</span><span class="cnt"><span class="dot d-pending"></span>2 tasks · 1 working · 1 queued</span></td></tr>
+    <tr><td class="ind"><span class="dot d-pending"></span>Usage monitor across accounts</td><td>running</td><td class="soft">quick-task</td><td class="soft">cez/9c0d1e2f</td><td class="soft">12m</td><td class="soft">$2.10</td></tr>
+    <tr><td class="ind"><span class="dot d-neutral"></span>Fix flaky usage test</td><td>#1 in queue</td><td class="soft">quick-task</td><td class="soft">—</td><td class="soft">4m</td><td class="soft">—</td></tr>
+
+    <tr class="gh"><td colspan="6"><span class="phase p-impl">Implement</span><span class="chip">Issue #51</span>Repo file browser<span class="src">from tasks · 1 implement task</span><span class="cnt"><span class="dot d-success"></span>1 task</span></td></tr>
+    <tr><td class="ind"><span class="dot d-success"></span>Repo file browser — tree view</td><td>done</td><td class="soft">quick-task</td><td class="soft">cez/3a4b5c6d</td><td class="soft">5h</td><td class="soft">$3.02</td></tr>
+
+    <tr class="gh"><td colspan="6"><span class="phase p-plan">Plan</span><span class="chip">ABC-41</span>Jira: export CSV<span class="src">from ABC-41 · To Do</span><span class="cnt"><span class="dot d-success"></span>1 task</span></td></tr>
+    <tr><td class="ind"><span class="dot d-success"></span>Spec: CSV export</td><td>done</td><td class="soft">quick-task</td><td class="soft">spec/csv-export</td><td class="soft">3h</td><td class="soft">$0.66</td></tr>
+  </tbody>
+</table>
+<p class="caption">Illustrative mockup, placeholder data. Group order: most urgent attention first, then newest activity; "No PR/issue" last (scrolled out of view).</p>
+</body></html>

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mockup — sidebar, By PR/issue</title>
+<style>
+  :root{--bg:#111214;--panel:#17181b;--line:#26282d;--fg:#e6e7ea;--soft:#8b8f98;--success:#3fb27f;--pending:#e0a43a;--danger:#e5534b;--violet:#a371f7;--info:#4c8dff}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 -apple-system,Inter,Segoe UI,sans-serif;display:flex;gap:24px;padding:20px}
+  .side{width:300px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .proj{font-weight:600;display:flex;justify-content:space-between;align-items:center;padding:4px 6px 8px}
+  .tabs{display:flex;gap:6px;align-items:center;padding:0 6px 8px;flex-wrap:wrap}
+  .tab{padding:2px 8px;border-radius:6px;color:var(--soft)} .tab.on{background:#23252a;color:var(--fg)}
+  .seg{margin-left:auto;display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  .seg span{padding:2px 7px;color:var(--soft);font-size:12px} .seg span.on{background:#2b2e35;color:var(--fg)}
+  .grp{margin-top:8px;border-top:1px solid var(--line);padding-top:6px}
+  .gh{display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:12px}
+  .phase{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:4px;border:1px solid}
+  .p-plan{color:var(--soft);border-color:#3a3d44} .p-impl{color:var(--pending);border-color:#5a4520} .p-rev{color:var(--violet);border-color:#4a3570} .p-del{color:var(--success);border-color:#215a40} .p-none{color:var(--soft);border-color:transparent}
+  .chip{font-family:ui-monospace,monospace;font-size:11px;color:var(--info)}
+  .gt{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--soft)}
+  .dot{width:8px;height:8px;border-radius:50%} .d-danger{background:var(--danger)} .d-pending{background:var(--pending)} .d-success{background:var(--success)} .d-violet{background:var(--violet)} .d-neutral{background:#555}
+  .cnt{color:var(--soft);font-size:11px}
+  .row{display:flex;align-items:center;gap:7px;padding:4px 6px 4px 18px;border-radius:6px} .row:hover{background:#1f2125}
+  .row.child{padding-left:34px} .row .t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .age{color:var(--soft);font-size:11px}
+  .kind{font-size:10px;color:var(--soft);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+  .more{padding:2px 18px;color:var(--info);font-size:12px}
+  .note{max-width:360px;color:var(--soft);font-size:12px}
+  .note h3{color:var(--fg);font-size:13px;margin:0 0 6px} .tip{background:#202227;border:1px solid var(--line);border-radius:6px;padding:6px 8px;color:var(--fg);font-size:11.5px;display:inline-block;margin:4px 0 10px}
+</style></head><body>
+<div class="side">
+  <div class="proj">cezar <span class="cnt">12 active</span></div>
+  <div class="tabs"><span class="tab on">Active 12</span><span class="tab">Archived</span>
+    <div class="seg" role="radiogroup"><span>Attention</span><span class="on">By PR/issue</span></div></div>
+
+  <div class="grp">
+    <div class="gh"><span class="phase p-rev">Review</span><span class="chip">#42</span><span class="gt">Task phases by PR/issue</span><span class="dot d-danger" title="needs you"></span><span class="cnt">3</span></div>
+    <div class="row"><span class="dot d-danger"></span><span class="t">Implement task phases, slice 1</span><span class="age">waiting</span></div>
+    <div class="row child"><span class="kind">review</span><span class="dot d-pending"></span><span class="t">Review #42</span><span class="age">2m</span></div>
+    <div class="row"><span class="dot d-success"></span><span class="t">Spec: task phases</span><span class="age">1h</span></div>
+  </div>
+
+  <div class="grp">
+    <div class="gh"><span class="phase p-impl">Implement</span><span class="chip">#38</span><span class="gt">Usage monitor</span><span class="dot d-pending"></span><span class="cnt">2</span></div>
+    <div class="row"><span class="dot d-pending"></span><span class="t">Usage monitor across accounts</span><span class="age">12m</span></div>
+    <div class="row"><span class="dot d-neutral"></span><span class="t">Fix flaky usage test</span><span class="age">#1 queue</span></div>
+  </div>
+
+  <div class="grp">
+    <div class="gh"><span class="phase p-plan">Plan</span><span class="chip">ABC-41</span><span class="gt">Jira: export CSV</span><span class="dot d-success"></span><span class="cnt">1</span></div>
+    <div class="row"><span class="dot d-success"></span><span class="t">Spec: CSV export</span><span class="age">3h</span></div>
+  </div>
+
+  <div class="grp">
+    <div class="gh"><span class="phase p-del">Delivery</span><span class="chip">#35</span><span class="gt">cez task projects</span><span class="dot d-success"></span><span class="cnt">4</span></div>
+    <div class="row"><span class="dot d-success"></span><span class="t">cez task projects</span><span class="age">1d</span></div>
+    <div class="more">+3 more in this group →</div>
+  </div>
+
+  <div class="grp">
+    <div class="gh"><span class="phase p-none">No PR/issue</span><span class="gt"></span><span class="cnt">2</span></div>
+    <div class="row"><span class="dot d-success"></span><span class="t">Explore sidebar perf</span><span class="age">2d</span></div>
+  </div>
+</div>
+<div class="note">
+  <h3>Illustrative mockup — sidebar quick-list, "By PR/issue" mode</h3>
+  <p>Replaces the Pinned / Needs you / Working / Recent buckets while active. One group per PR, issue or tracker item; dispatch children stay nested under their parent.</p>
+  <p>Header: derived phase · reference · title · most urgent member's attention dot · task count. Hovering the phase shows what decided it:</p>
+  <span class="tip">Review — from PR #42 · review-required</span>
+  <p>Placeholder data. Not a design system spec.</p>
+</div>
+</body></html>
