@@ -11,6 +11,7 @@ import {
   groupKeyId,
   groupKeyOf,
   groupStatusRequests,
+  groupTrackerRefs,
   isPlanKind,
   phaseFilterCounts,
   phaseFromWords,
@@ -297,5 +298,55 @@ describe('filters, counts, cap and requests', () => {
     )
     expect(groupKeyId(null)).toBe('none')
     expect(groupKeyId({ kind: 'tracker', provider: 'jira', key: 'ABC-1' })).toBe('tracker:jira:ABC-1')
+  })
+})
+
+describe('richer signals (PR B)', () => {
+  const jira = (key: string) => ({ provider: 'jira' as const, key, url: `https://acme.atlassian.net/browse/${key}` })
+
+  it('falls back to the trackerRef after GitHub references', () => {
+    expect(runGroupKey(run({ trackerRef: jira('ABC-41') }))).toEqual({ kind: 'tracker', provider: 'jira', key: 'ABC-41' })
+    expect(runGroupKey(run({ trackerRef: jira('ABC-41'), prNumber: 3 }))).toEqual(PR(3))
+  })
+
+  it('a tracker group takes its root task title and links the item', () => {
+    const groups = groupByReference([run({ title: 'Fix the export', trackerRef: jira('ABC-41') })], 'active')
+    expect(groups[0]).toMatchObject({ id: 'tracker:jira:ABC-41', title: 'Fix the export', url: jira('ABC-41').url })
+  })
+
+  it('feeds key labels and the newest member tracker item into layer 2', () => {
+    const older = run({ prNumber: 5, trackerRef: jira('ABC-1'), createdAt: '2026-10-01T08:00:00.000Z' })
+    const newer = run({ prNumber: 5, trackerRef: jira('ABC-2'), createdAt: '2026-10-02T08:00:00.000Z' })
+    const asked: string[] = []
+    const withTracker = groupByReference([older, newer], 'active', {
+      trackerOf: (ref) => {
+        asked.push(ref.key)
+        return { status: 'In Progress' }
+      },
+    })
+    expect(asked).toEqual(['ABC-2'])
+    expect(withTracker[0]).toMatchObject({ phase: 'implement', source: 'ABC-2 · In Progress' })
+
+    const labelled = groupByReference([older, newer], 'active', {
+      labelsOf: () => ['review', 'qa'],
+      trackerOf: () => ({ status: 'In Progress' }),
+    })
+    expect(labelled[0]).toMatchObject({ phase: 'delivery', source: 'label `qa`' })
+  })
+
+  it('a payload without labels or tracker answers behaves exactly as before', () => {
+    const runs = [run({ prNumber: 5, status: 'review' })]
+    expect(groupByReference(runs, 'active', { labelsOf: () => undefined, trackerOf: () => undefined })).toEqual(
+      groupByReference(runs, 'active'),
+    )
+  })
+
+  it('collects distinct tracker refs, newest first, capped', () => {
+    const runs = Array.from({ length: 25 }, (_, i) =>
+      run({ trackerRef: jira(`K-${i % 22}`), createdAt: `2026-10-0${1 + (i % 9)}T00:00:00.000Z` }),
+    )
+    const refs = groupTrackerRefs(runs)
+    expect(refs).toHaveLength(20)
+    expect(new Set(refs.map((ref) => ref.key)).size).toBe(20)
   })
 })

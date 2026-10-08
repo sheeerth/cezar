@@ -39,6 +39,7 @@ import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { GroupingToggle, PHASE_LABEL, ReferenceGroupHeader, useGroupPhaseLookups } from '@/components/task-phase'
+import { MaybeTrackerSignals } from '@/components/task-quick-list'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -1399,28 +1400,30 @@ export function TasksOverviewRoute() {
 
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
-      <TasksOverview
-        runs={runs.data}
-        view={view}
-        onViewChange={setView}
-        onArchiveFinished={() => archive.mutate()}
-        onMarkAllRead={() => markAllRead.mutate()}
-        onRename={(id, title) => rename.mutate({ id, title })}
-        onTogglePin={(run, pinned) =>
-          pin.mutate(
-            { id: run.id, pinned },
-            { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
-          )
-        }
-        now={now}
-        showTokens={metricVisibility.tokens}
-        showCost={metricVisibility.cost}
-        expandedColumns={taskTableColumns.expandedColumns}
-        onToggleColumn={taskTableColumns.toggleColumn}
-        columnsPending={taskTableColumns.isPending}
-        grouping={grouping}
-        onGroupingChange={setGrouping}
-      />
+      <MaybeTrackerSignals enabled={grouping === 'byReference'} runs={runs.data ?? []}>
+        <TasksOverview
+          runs={runs.data}
+          view={view}
+          onViewChange={setView}
+          onArchiveFinished={() => archive.mutate()}
+          onMarkAllRead={() => markAllRead.mutate()}
+          onRename={(id, title) => rename.mutate({ id, title })}
+          onTogglePin={(run, pinned) =>
+            pin.mutate(
+              { id: run.id, pinned },
+              { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+            )
+          }
+          now={now}
+          showTokens={metricVisibility.tokens}
+          showCost={metricVisibility.cost}
+          expandedColumns={taskTableColumns.expandedColumns}
+          onToggleColumn={taskTableColumns.toggleColumn}
+          columnsPending={taskTableColumns.isPending}
+          grouping={grouping}
+          onGroupingChange={setGrouping}
+        />
+      </MaybeTrackerSignals>
     </ReferenceStatusProvider>
   )
 }

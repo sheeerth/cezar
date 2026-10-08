@@ -1379,6 +1379,8 @@ export type GithubRefStatusData =
        *  never folded into a status. Optional on the wire, and absent means "nothing is known"
        *  rather than "no conflicts"; see `conflicts` in the contract. */
       conflicts?: number[];
+      /** Label names per number, only for numbers that have any — absent = no labels known. */
+      labels?: Record<number, string[]>;
       /** When to ask again, or `null` when nothing here can change. See `recheckAfterMs` in the
        *  contract for why the SERVER answers this. */
       recheckAfterMs: number | null;
@@ -1408,8 +1410,22 @@ function reviewerKey(ref: z.infer<typeof reviewerRefSchema>): string | null {
   return name ? `${ref?.__typename ?? '?'}:${name}` : null;
 }
 
+/** Label names on a PR or issue (spec 2026-10-07-task-phases-by-pr-issue, step 8) — the cockpit
+ *  reads them as a phase signal. Riding the node the status already comes from, so no extra
+ *  request; `nullish` everywhere because an older fixture, or a forge that omits them, is not an
+ *  error. */
+const ghRefStatusLabelsSchema = z
+  .object({ nodes: z.array(z.object({ name: z.string() }).nullish()).nullish() })
+  .nullish();
+
+/** The label names of one node, empty when there are none or none were sent. */
+function labelNames(labels: z.infer<typeof ghRefStatusLabelsSchema>): string[] {
+  return (labels?.nodes ?? []).flatMap((node) => (node?.name ? [node.name] : [])).slice(0, 20);
+}
+
 const ghRefStatusPrSchema = z
   .object({
+    labels: ghRefStatusLabelsSchema,
     state: z.string(),
     isDraft: z.boolean().nullish(),
     reviewDecision: z.string().nullish(),
@@ -1490,7 +1506,9 @@ function standingReviewRequestedAt(
   return newest;
 }
 
-const ghRefStatusIssueSchema = z.object({ state: z.string(), stateReason: z.string().nullish() }).nullish();
+const ghRefStatusIssueSchema = z
+  .object({ state: z.string(), stateReason: z.string().nullish(), labels: ghRefStatusLabelsSchema })
+  .nullish();
 
 // The aliases hold two DIFFERENT shapes, so the record stays unvalidated here and each alias is
 // parsed by its own schema below. A union at this level would be wrong, not merely loose: zod
@@ -1528,7 +1546,7 @@ function refStatusQuery(numbers: number[]): string {
   const aliases = numbers
     .map(
       (n, i) =>
-        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason } }`,
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { labels(first: 20) { nodes { name } } state isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason labels(first: 20) { nodes { name } } } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -1718,6 +1736,8 @@ export interface ResolvedReference {
    *  collapsed into "not conflicting", because it is the difference between an answer and a
    *  question GitHub has not finished answering. */
   mergeable?: Mergeability;
+  /** Label names, present only when the node carries any. */
+  labels?: string[];
 }
 
 /**
@@ -1798,11 +1818,17 @@ export async function fetchRefStatuses(
             // The tri-state, not a boolean: `unknown` has to survive as far as the cache, which
             // is what decides to ask again in seconds rather than in a minute.
             ...(mergeability ? { mergeable: mergeability } : {}),
+            ...(labelNames(pr.labels).length ? { labels: labelNames(pr.labels) } : {}),
           };
         } else if (node.__typename === 'Issue') {
           const issue = ghRefStatusIssueSchema.parse(node);
           if (!issue) return;
-          out.resolved[number] = { kind: 'issue', status: deriveIssueReferenceStatus(issue) };
+          const issueLabels = labelNames(issue.labels);
+          out.resolved[number] = {
+            kind: 'issue',
+            status: deriveIssueReferenceStatus(issue),
+            ...(issueLabels.length ? { labels: issueLabels } : {}),
+          };
         }
       });
     } catch (err) {
@@ -2075,12 +2101,17 @@ export async function fetchGithubRefStatus(
   // The second axis, and a list rather than a map because it is nearly always empty: only the
   // pull requests the forge actively called CONFLICTING are named (see `mergeabilityOf`).
   const conflicts: number[] = [];
+  // Label names (task phases, step 8): only numbers that carry any, so the common case — no
+  // labels anywhere — sends no key at all and the payload is byte-identical to before.
+  const labels: Record<number, string[]> = {};
   const file = (number: number, entry: ResolvedReference | null, unknownSince?: number) => {
     rechecks.push(refStatusRecheckAfter(entry, unknownSince));
     if (!entry) return;
     resolved[entry.kind === 'pr' ? 'prs' : 'issues'][number] = entry.status;
     if (entry.mergeable === 'conflicting') conflicts.push(number);
+    if (entry.labels?.length) labels[number] = entry.labels;
   };
+  const labelsField = () => (Object.keys(labels).length > 0 ? { labels } : {});
   const misses: number[] = [];
   const now = Date.now();
   for (const n of wanted) {
@@ -2094,6 +2125,7 @@ export async function fetchGithubRefStatus(
       prs: resolved.prs,
       issues: resolved.issues,
       conflicts,
+      ...labelsField(),
       recheckAfterMs: batchRecheckAfter(rechecks),
     };
   }
@@ -2149,6 +2181,7 @@ export async function fetchGithubRefStatus(
       prs: resolved.prs,
       issues: resolved.issues,
       conflicts,
+      ...labelsField(),
       recheckAfterMs: batchRecheckAfter(rechecks),
     };
   } catch (err) {

@@ -93,14 +93,23 @@ export function isPlanKind(run: PlanKindInput): boolean {
 
 // ── Group keys ───────────────────────────────────────────────────────────────────────────────
 
-export type GroupKeyInput = Parameters<typeof taskReferences>[0]
+/** Display-only tracker provenance (`RunRecord.trackerRef`, projected server-side). */
+export interface TrackerRefInput {
+  provider: 'jira' | 'linear'
+  key: string
+  url: string
+}
+
+export type GroupKeyInput = Parameters<typeof taskReferences>[0] & { trackerRef?: TrackerRefInput | undefined }
 
 /** The run's OWN key: its first reference in `taskReferences` order (PRs strongest-first, then
- *  issues). Null when it knows none. */
+ *  issues), else the Jira/Linear item a tracker automation launched it for. Null when it knows
+ *  none. */
 export function runGroupKey(run: GroupKeyInput, repoBase?: string): TaskGroupKey | null {
   const first = taskReferences(run, repoBase)[0]
-  if (!first) return null
-  return { kind: first.kind === 'PR' ? 'pr' : 'issue', number: first.number }
+  if (first) return { kind: first.kind === 'PR' ? 'pr' : 'issue', number: first.number }
+  if (run.trackerRef) return { kind: 'tracker', provider: run.trackerRef.provider, key: run.trackerRef.key }
+  return null
 }
 
 /**
@@ -265,6 +274,10 @@ export interface PhaseLookups {
   /** The forge's answer for a PR/issue key — `pending` while it is still being asked. */
   statusOf?: ((key: TaskGroupKey) => { status?: ReferenceStatus | undefined; pending?: boolean } | undefined) | undefined
   labelsOf?: ((key: TaskGroupKey) => readonly string[] | undefined) | undefined
+  /** The tracker item behind a `trackerRef` — its status and labels (layers 2b/2c). */
+  trackerOf?:
+    | ((ref: TrackerRefInput) => { status?: string | undefined; labels?: readonly string[] | undefined } | undefined)
+    | undefined
 }
 
 export interface GroupCounts {
@@ -401,14 +414,23 @@ export function groupByReference(
     const members = allMembers.get(id) ?? []
     const visible = visibleByGroup.get(id) ?? []
     const forge = key && key.kind !== 'tracker' ? lookups.statusOf?.(key) : undefined
+    // The tracker item is the `trackerRef` of the NEWEST member that carries one (spec, layer 2).
+    const trackerRef = [...members].reverse().find((run) => run.trackerRef)?.trackerRef
+    const trackerItem = trackerRef ? lookups.trackerOf?.(trackerRef) : undefined
     const derived = deriveGroupPhase({
       key,
       keyStatus: forge?.status,
       keyLabels: key ? lookups.labelsOf?.(key) : undefined,
+      tracker: trackerRef && trackerItem ? { key: trackerRef.key, ...trackerItem } : undefined,
       members,
     })
     const root = members.find((run) => run.dispatch?.parentRunId === undefined) ?? members[0]
-    const url = key && key.kind !== 'tracker' ? keyUrl(key, members, lookups.repoBase) : undefined
+    const url =
+      key === null
+        ? undefined
+        : key.kind === 'tracker'
+          ? members.find((run) => run.trackerRef?.key === key.key)?.trackerRef?.url
+          : keyUrl(key, members, lookups.repoBase)
     groups.push({
       ...(url ? { url } : {}),
       key,
@@ -487,6 +509,19 @@ export function capReferenceGroups<G extends Pick<ReferenceGroup, 'rows'>>(
     capped.push({ ...group, rows, hidden: group.rows.length - rows.length })
   }
   return capped
+}
+
+/** Every distinct tracker item a grouped list could read a phase signal from — the `trackerRef`
+ *  of each group's newest member that carries one, capped (spec A6: 20 per project). */
+export function groupTrackerRefs(runs: readonly RunRecord[], limit = 20): TrackerRefInput[] {
+  const byKey = new Map<string, TrackerRefInput>()
+  const newestFirst = [...runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  for (const run of newestFirst) {
+    if (!run.trackerRef || byKey.has(`${run.trackerRef.provider}:${run.trackerRef.key}`)) continue
+    byKey.set(`${run.trackerRef.provider}:${run.trackerRef.key}`, run.trackerRef)
+    if (byKey.size >= limit) break
+  }
+  return [...byKey.values()]
 }
 
 /** Every PR/issue key a grouped list needs a forge status for — what a surface adds to its

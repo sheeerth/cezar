@@ -3,6 +3,7 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
 } from '@open-mercato/cezar-contract';
+import { trackerRefOf, withTrackerRef, type RunTrackerRef } from '../runs/tracker-ref.ts';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
@@ -4021,9 +4022,13 @@ export function createApp(deps: ServerDeps) {
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
   // run's live process tree — absent for finished runs and when `ps` yields
   // nothing. The stored record itself is never touched.
-  const withUsage = (run: RunRecord): RunRecord & { usage?: ReturnType<typeof currentUsage> } => {
+  // Plus the display-only `trackerRef` (task phases, step 9), projected from `automationTracker`.
+  const withUsage = (
+    run: RunRecord,
+  ): RunRecord & { usage?: ReturnType<typeof currentUsage>; trackerRef?: RunTrackerRef } => {
     const usage = currentUsage(run.id);
-    return usage ? { ...run, usage } : run;
+    const projected = withTrackerRef(run);
+    return usage ? { ...projected, usage } : projected;
   };
 
   // The inbox half of a composer launch (#374). Since the cockpit's "▶ Run"
@@ -5316,7 +5321,7 @@ export function createApp(deps: ServerDeps) {
         };
         const onRun = (run: RunRecord) => {
           if (run.id !== id) return;
-          void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
+          void stream.writeSSE({ event: 'run', data: JSON.stringify(withTrackerRef(run)) });
         };
         store.on('event', onEvent);
         store.on('run', onRun);
@@ -5339,7 +5344,7 @@ export function createApp(deps: ServerDeps) {
           if (event.seq > maxSeq) await writeEvent(event);
         }
         const run = store.getRun(id);
-        if (run) await stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
+        if (run) await stream.writeSSE({ event: 'run', data: JSON.stringify(withTrackerRef(run)) });
 
         while (!stream.aborted) {
           await stream.writeSSE({ event: 'ping', data: '' });
@@ -5357,7 +5362,7 @@ export function createApp(deps: ServerDeps) {
     .get('/events', (c) => {
       const { dataDir, store } = c.get('project');
       return streamSSENoBuffer(c, async (stream) => {
-        const onRun = (run: RunRecord) => void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
+        const onRun = (run: RunRecord) => void stream.writeSSE({ event: 'run', data: JSON.stringify(withTrackerRef(run)) });
         const onDeleted = (id: string) =>
           void stream.writeSSE({
             event: 'run-deleted',
@@ -5414,7 +5419,7 @@ export function createApp(deps: ServerDeps) {
           const onRun = (run: RunRecord) =>
             void stream.writeSSE({
               event: 'run',
-              data: JSON.stringify({ ...run, project }),
+              data: JSON.stringify({ ...withTrackerRef(run), project }),
             });
           const onDeleted = (id: string) =>
             void stream.writeSSE({
@@ -6270,6 +6275,7 @@ export function createApp(deps: ServerDeps) {
 
   const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => {
     const usage = currentUsage(run.id);
+    const trackerRef = trackerRefOf(run);
     return {
     projectId,
     id: run.id,
@@ -6307,6 +6313,9 @@ export function createApp(deps: ServerDeps) {
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
+    // Display-only tracker provenance (task phases, step 9) — the reference a Jira/Linear task
+    // groups under when it knows no GitHub number.
+    ...(trackerRef ? { trackerRef } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
     ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
     ...(run.peakProcCount !== undefined ? { peakProcCount: run.peakProcCount } : {}),

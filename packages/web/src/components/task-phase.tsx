@@ -5,7 +5,9 @@ import type { ListGrouping } from '@/components/list-view'
 import { ReferenceChip } from '@/components/reference-chip'
 import { useReferenceStatusLookup } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
-import type { PhaseLookups, ReferenceGroup, TaskPhase } from '@/lib/task-phases'
+import { useTrackerItemSignals, type TrackerItemSignal } from '@/api/queries'
+import type { RunRecord } from '@open-mercato/cezar-api-client'
+import { groupTrackerRefs, type PhaseLookups, type ReferenceGroup, type TaskPhase } from '@/lib/task-phases'
 import { cn } from '@/lib/utils'
 
 /**
@@ -132,16 +134,45 @@ export function PhaseBadge({
  */
 export function useGroupPhaseLookups(): PhaseLookups {
   const { lookup, projectId } = useReferenceStatusLookup()
+  const trackerOf = React.useContext(TrackerSignalsContext)
   return React.useMemo<PhaseLookups>(
     () => ({
+      trackerOf,
       statusOf: (key) => {
         if (key.kind === 'tracker' || projectId === undefined) return undefined
         const entry = lookup({ projectId, kind: key.kind === 'pr' ? 'PR' : 'Issue', number: key.number })
         return { status: entry.status, pending: entry.state === 'loading' }
       },
+      labelsOf: (key) => {
+        if (key.kind === 'tracker' || projectId === undefined) return undefined
+        return lookup({ projectId, kind: key.kind === 'pr' ? 'PR' : 'Issue', number: key.number }).labels
+      },
     }),
-    [lookup, projectId],
+    [lookup, projectId, trackerOf],
   )
+}
+
+type TrackerSignalLookup = (ref: { provider: string; key: string }) => TrackerItemSignal | undefined
+
+/** Outside a provider nothing is known about any tracker item — the tasks decide. */
+const TrackerSignalsContext = React.createContext<TrackerSignalLookup>(() => undefined)
+
+/**
+ * Reads the Jira/Linear items behind a list's `trackerRef`s (task phases, step 10) and hands
+ * their status and labels to every grouped list below it. A provider rather than a call inside the
+ * lists, for the same reason as `ReferenceStatusProvider`: the lists are presentational and render
+ * in tests without a query client, and only a surface standing in the ACTIVE project may mount it —
+ * the tracker routes answer for the scoped project, so another project's refs must never reach them.
+ */
+export function TrackerSignalsProvider({
+  runs,
+  children,
+}: {
+  runs: readonly RunRecord[]
+  children: React.ReactNode
+}) {
+  const trackerOf = useTrackerItemSignals(groupTrackerRefs(runs))
+  return <TrackerSignalsContext.Provider value={trackerOf}>{children}</TrackerSignalsContext.Provider>
 }
 
 /**
@@ -180,6 +211,19 @@ export function ReferenceGroupHeader({
           compact
           className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
         />
+      ) : null}
+      {/* A Jira/Linear key has no forge status to colour a chip with — a plain link to the item. */}
+      {key?.kind === 'tracker' ? (
+        <a
+          href={group.url}
+          target="_blank"
+          rel="noreferrer"
+          data-slot="tracker-chip"
+          title={group.url}
+          className="inline-flex shrink-0 items-center rounded-full border border-border px-1.5 py-px font-mono text-[10.5px] font-semibold text-muted-foreground hover:bg-muted"
+        >
+          {key.key}
+        </a>
       ) : null}
       <button
         type="button"

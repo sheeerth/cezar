@@ -25,7 +25,7 @@ import { useSidebarNavigate } from '@/components/app-shell'
 import { useListGrouping, useListView, type ListGrouping } from '@/components/list-view'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { ReferenceStatusProvider } from '@/components/reference-status'
-import { QuickListBuckets, QuickListReferenceGroups } from '@/components/task-quick-list'
+import { MaybeTrackerSignals, QuickListBuckets, QuickListReferenceGroups } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
 import { moveProjectId, orderProjects } from '@/lib/project-order'
@@ -705,17 +705,20 @@ function ProjectGroup({
           <ReferenceStatusProvider projectId={project.id} requests={referenceRequests}>
             {byReference ? (
               runs.data ? (
-                <QuickListReferenceGroups
-                  runs={runs.data}
-                  view={view}
-                  limit={RECENT_LIMIT}
-                  currentRunId={active ? currentRunId : null}
-                  now={now}
-                  scope={project.id}
-                  showTokens={showTokens}
-                  showCost={showCost}
-                  onTogglePin={view === 'archived' ? undefined : onTogglePin}
-                />
+                // Only the ACTIVE project may read its tracker: those routes answer for the scope.
+                <MaybeTrackerSignals enabled={active} runs={runs.data}>
+                  <QuickListReferenceGroups
+                    runs={runs.data}
+                    view={view}
+                    limit={RECENT_LIMIT}
+                    currentRunId={active ? currentRunId : null}
+                    now={now}
+                    scope={project.id}
+                    showTokens={showTokens}
+                    showCost={showCost}
+                    onTogglePin={view === 'archived' ? undefined : onTogglePin}
+                  />
+                </MaybeTrackerSignals>
               ) : null
             ) : (
               <QuickListBuckets

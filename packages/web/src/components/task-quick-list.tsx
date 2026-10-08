@@ -8,7 +8,7 @@ import { useListGrouping, useListView, type ListGrouping } from '@/components/li
 import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
-import { GroupingToggle, ReferenceGroupHeader, useGroupPhaseLookups } from '@/components/task-phase'
+import { GroupingToggle, ReferenceGroupHeader, TrackerSignalsProvider, useGroupPhaseLookups } from '@/components/task-phase'
 import { StatusDot } from '@/components/status-dot'
 import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
@@ -749,21 +749,36 @@ export function TaskQuickListContainer() {
 
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
-      <TaskQuickList
-        runs={runs.data}
-        view={view}
-        onViewChange={setView}
-        grouping={grouping}
-        onGroupingChange={setGrouping}
-        // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
-        currentRunId={match?.params.id ?? exact?.params.id ?? null}
-        now={now}
-        showTokens={visibility.tokens}
-        showCost={visibility.cost}
-        // This list is the ACTIVE project's, so the mutation needs no explicit project: the
-        // scoped client already addresses the one the URL names.
-        onTogglePin={onTogglePin}
-      />
+      <MaybeTrackerSignals enabled={grouping === 'byReference'} runs={runs.data}>
+        <TaskQuickList
+          runs={runs.data}
+          view={view}
+          onViewChange={setView}
+          grouping={grouping}
+          onGroupingChange={setGrouping}
+          // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
+          currentRunId={match?.params.id ?? exact?.params.id ?? null}
+          now={now}
+          showTokens={visibility.tokens}
+          showCost={visibility.cost}
+          // This list is the ACTIVE project's, so the mutation needs no explicit project: the
+          // scoped client already addresses the one the URL names.
+          onTogglePin={onTogglePin}
+        />
+      </MaybeTrackerSignals>
     </ReferenceStatusProvider>
   )
+}
+
+/** Tracker reads exist only for the By PR/issue mode — the attention list never asks. */
+export function MaybeTrackerSignals({
+  enabled,
+  runs,
+  children,
+}: {
+  enabled: boolean
+  runs: readonly RunRecord[]
+  children: React.ReactNode
+}) {
+  return enabled ? <TrackerSignalsProvider runs={runs}>{children}</TrackerSignalsProvider> : <>{children}</>
 }

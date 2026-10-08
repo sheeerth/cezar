@@ -89,7 +89,7 @@ import {
   retryProviderAuth,
   searchTrackerItems,
 } from './client'
-import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels, trackerReadScope } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
@@ -344,6 +344,76 @@ export function useTrackerItems(
       }
     },
   }
+}
+
+/** A tracker item's phase inputs (task phases, step 10). */
+export interface TrackerItemSignal {
+  status?: string
+  labels?: readonly string[]
+}
+
+/** How many tracker items one surface may read for phases (spec A6). */
+export const TRACKER_SIGNAL_MAX = 20
+const TRACKER_SIGNAL_STALE_MS = 10 * 60_000
+
+/**
+ * Status and labels of the Jira/Linear items behind the `trackerRef`s a task list shows — the
+ * layer-2 phase signals (spec 2026-10-07-task-phases-by-pr-issue, step 10, A6).
+ *
+ * Gated, because each one is a request to a vendor: nothing is asked unless the project HAS a
+ * configured tracker connection and association (configuring one in Settings is the opt-in the
+ * owner ratified — no `CEZ_*` flag), and only refs from that provider are asked about, with
+ * `expectedScope` set so a ref from another source or connection is refused (`source_changed`)
+ * rather than read. At most 20 keys; 10-minute cache; no polling and no refetch on focus. Every
+ * failure — `not_configured`, `unauthorized`, `rate_limited`, `source_changed`, a 404 — is "no
+ * signal", never an error.
+ */
+export function useTrackerItemSignals(
+  refs: readonly { provider: string; key: string }[],
+): (ref: { provider: string; key: string }) => TrackerItemSignal | undefined {
+  const connection = useTrackerConnection()
+  const associationQuery = useTrackerAssociation()
+  const association = associationQuery.data?.association ?? null
+  const configured = connection.data?.connection != null && association !== null
+  const keys = configured
+    ? [...new Set(refs.filter((ref) => ref.provider === association.kind).map((ref) => ref.key))].slice(
+        0,
+        TRACKER_SIGNAL_MAX,
+      )
+    : []
+  const scope = association ? trackerReadScope(association) : ''
+  const results = useQueries({
+    queries: keys.map((key) => ({
+      queryKey: ['tracker', queryScope(), 'phase-signal', scope, key] as const,
+      queryFn: async ({ signal }: { signal: AbortSignal }): Promise<TrackerItemSignal | null> => {
+        try {
+          const answer = await getTrackerItem(key, { signal, association: association ?? undefined })
+          return answer.available ? { status: answer.item.status, labels: answer.item.labels } : null
+        } catch {
+          return null
+        }
+      },
+      staleTime: TRACKER_SIGNAL_STALE_MS,
+      refetchOnWindowFocus: false,
+      refetchInterval: false as const,
+      retry: false,
+    })),
+  })
+  const signature = results.map((result) => `${result.dataUpdatedAt}`).join(',')
+  const byKey = useMemo(() => {
+    const map = new Map<string, TrackerItemSignal>()
+    results.forEach((result, index) => {
+      const key = keys[index]
+      if (key !== undefined && result.data) map.set(key, result.data)
+    })
+    return map
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `signature` + the keys ARE the content
+  }, [signature, keys.join('|')])
+  return useCallback(
+    (ref: { provider: string; key: string }) =>
+      association && ref.provider === association.kind ? byKey.get(ref.key) : undefined,
+    [byKey, association],
+  )
 }
 
 export function useTrackerItem(association: TrackerAssociation | null | undefined, id: string | undefined) {
@@ -1832,6 +1902,10 @@ export interface ReferenceStatusEntry {
    * `true` may paint anything.
    */
   conflicting?: boolean
+  /** Label names on the PR/issue from the current answer (task phases, step 8). Absent = none
+   *  known — no labels, no answer yet, or a server from before the field. Not remembered across
+   *  answers: a label is a phase hint, and a stale one is worse than none. */
+  labels?: readonly string[]
 }
 
 export type ReferenceStatusLookup = (ref: ReferenceStatusRequest) => ReferenceStatusEntry
@@ -2155,6 +2229,7 @@ export function useReferenceStatuses(
             // A server from before the field omits `conflicts` entirely, and that absence is not
             // an answer: leave the memory alone rather than clearing it to "merges cleanly".
             const conflicting = data.conflicts ? data.conflicts.includes(ref.number) : undefined
+            const labels = data.labels?.[ref.number]
             // Written during render on purpose: this is a cache, not state — the write is
             // idempotent, derived solely from the response, and re-running it (StrictMode's
             // double invoke) lands on the same value.
@@ -2164,6 +2239,7 @@ export function useReferenceStatuses(
               state: 'ready',
               status,
               ...((conflicting ?? rememberedConflict) ? { conflicting: true } : {}),
+              ...(labels?.length ? { labels } : {}),
             })
           } else {
             map.set(key, { state: 'unknown', ...(remembered ? { status: remembered } : {}) })
