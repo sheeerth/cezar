@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
-import { ListViewProvider } from '@/components/list-view'
+import { LIST_GROUPING_STORAGE_KEY, ListViewProvider } from '@/components/list-view'
 import { ProjectGroups } from '@/components/project-groups'
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from '@/lib/sidebar-collapse'
 
@@ -161,6 +161,26 @@ describe('ProjectGroups', () => {
 
     const more = within(group('cezar')).getByRole('link', { name: 'More…' })
     expect(more.getAttribute('href')).toBe('/p/cezar/')
+  })
+
+  it('By PR/issue: caps rows across reference groups and offers "+k more" on the cut group', async () => {
+    localStorage.setItem(LIST_GROUPING_STORAGE_KEY, 'byReference')
+    const runs = [
+      ...Array.from({ length: 12 }, () => run({ prNumber: 7, status: 'waiting' })),
+      ...Array.from({ length: 3 }, () => run()),
+    ]
+    serve({ '/api/v1/p/cezar/runs': runs })
+    renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+    await waitFor(() => expect(group('cezar').querySelector('[data-slot="reference-group"]')).not.toBeNull())
+    const groups = [...group('cezar').querySelectorAll('[data-slot="reference-group"]')] as HTMLElement[]
+    // Ten rows in the PR group, and nothing left for "No PR/issue" — the project's More… covers it.
+    expect(groups.map((el) => el.dataset.group)).toEqual(['pr#7'])
+    expect(groups[0]!.querySelectorAll('[data-slot="task-row"]')).toHaveLength(10)
+    const more = within(groups[0]!).getByRole('link', { name: '+2 more' })
+    expect(more.getAttribute('href')).toBe('/p/cezar/')
+    // No attention buckets in this mode.
+    expect(group('cezar').querySelector('[data-slot="quick-list-bucket"]')).toBeNull()
   })
 
   it('orders groups by lastOpenedAt and only fetches the expanded one', async () => {
