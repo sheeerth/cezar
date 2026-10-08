@@ -4073,7 +4073,7 @@ export function createApp(deps: ServerDeps) {
       // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
       const run = store.setArchived(id, parsed.data.archived !== false);
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withTrackerRef(run)) : c.json({ error: 'not found' }, 404);
     })
 
     // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
@@ -4083,7 +4083,7 @@ export function createApp(deps: ServerDeps) {
     .post('/runs/:id/pin', jsonZodValidator(pinSchema, { absent: ({}) }), (c) => {
       const { store } = c.get('project');
       const run = store.setPinned(c.req.param('id'), c.req.valid('json').pinned !== false);
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withTrackerRef(run)) : c.json({ error: 'not found' }, 404);
     })
 
     // The per-task off switch for that resume (the workspace setting is Settings → Resources).
@@ -4101,7 +4101,7 @@ export function createApp(deps: ServerDeps) {
       // No body: opening a thread marks it read, full stop. Stamps `seenAt = now` and
       // returns the updated record (which also rides the `run` SSE via `touch`).
       const run = c.get('project').store.setRead(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withTrackerRef(run)) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs/:id/unread', (c) => {
@@ -4109,7 +4109,7 @@ export function createApp(deps: ServerDeps) {
       // receipt is the whole action, so there is nothing to say about it. Sits under
       // `/runs/:id/`, so the `read-all` registration-order caveat above does not apply.
       const run = c.get('project').store.setUnread(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withTrackerRef(run)) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs', jsonZodValidator(startRunSchema), async (c) => {
@@ -4261,7 +4261,8 @@ export function createApp(deps: ServerDeps) {
           titleOrigin: 'user',
         });
       }
-      return c.json(store.getRun(id));
+      const patched = store.getRun(id);
+      return c.json(patched ? withTrackerRef(patched) : patched);
     })
 
     .post('/runs/:id/cancel', (c) => {

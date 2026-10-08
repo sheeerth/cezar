@@ -55,10 +55,13 @@ const itemCalls = (fetchMock: ReturnType<typeof serve>) =>
     .map((call) => new URL(String(call[0]), 'http://localhost').pathname)
     .filter((path) => !path.endsWith('/connection') && !path.endsWith('/association') && path.includes('/tracker/'))
 
-function render(refs: { provider: string; key: string }[]) {
+const SCOPE = '["jira","cloud","https://acme.atlassian.net","100",null]'
+
+function render(refs: { provider: string; key: string; scope?: string }[], enabled = true) {
   const client = createQueryClient()
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  return renderHook(() => useTrackerItemSignals(refs), { wrapper })
+  const scoped = refs.map((ref) => ('scope' in ref ? ref : { ...ref, scope: SCOPE }))
+  return renderHook(() => useTrackerItemSignals(scoped, enabled), { wrapper })
 }
 
 afterEach(() => {
@@ -72,7 +75,23 @@ describe('useTrackerItemSignals', () => {
     const { result } = render([{ provider: 'jira', key: 'OPS-1' }])
     await waitFor(() => expect(result.current({ provider: 'jira', key: 'OPS-1' })).toEqual({ status: 'In Review', labels: ['qa'] }))
     const call = fetchMock.mock.calls.find((c) => String(c[0]).includes('OPS-1'))
-    expect(new URL(String(call?.[0]), 'http://localhost').searchParams.get('expectedScope')).toContain('cloud')
+    // The RUN's launching scope travels, not the current association's.
+    expect(new URL(String(call?.[0]), 'http://localhost').searchParams.get('expectedScope')).toBe(SCOPE)
+  })
+
+  it('never reads a ref without a launching scope (legacy provenance)', async () => {
+    const fetchMock = serve({ 'OPS-1': item('OPS-1', 'Done') })
+    render([{ provider: 'jira', key: 'OPS-1', scope: undefined as unknown as string }])
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(itemCalls(fetchMock)).toEqual([])
+  })
+
+  it('asks nothing at all — not even the connection — when disabled (attention mode)', async () => {
+    const fetchMock = serve({ 'OPS-1': item('OPS-1', 'Done') })
+    render([{ provider: 'jira', key: 'OPS-1' }], false)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('makes no item request without a configured connection', async () => {
@@ -95,11 +114,12 @@ describe('useTrackerItemSignals', () => {
     },
   )
 
-  it('ignores refs from another provider and caps the reads', async () => {
+  it('filters to the configured provider before capping the reads', async () => {
     const refs = Array.from({ length: TRACKER_SIGNAL_MAX + 5 }, (_, i) => ({ provider: 'jira', key: `OPS-${i}` }))
+    const linear = Array.from({ length: TRACKER_SIGNAL_MAX }, (_, i) => ({ provider: 'linear', key: `ENG-${i}` }))
     const fetchMock = serve({})
-    render([{ provider: 'linear', key: 'ENG-1' }, ...refs])
+    render([...linear, ...refs])
     await waitFor(() => expect(itemCalls(fetchMock).length).toBe(TRACKER_SIGNAL_MAX))
-    expect(itemCalls(fetchMock).some((path) => path.includes('ENG-1'))).toBe(false)
+    expect(itemCalls(fetchMock).some((path) => path.includes('ENG-'))).toBe(false)
   })
 })

@@ -98,6 +98,8 @@ export interface TrackerRefInput {
   provider: 'jira' | 'linear'
   key: string
   url: string
+  /** The launching association's read scope — what a tracker read is checked against. */
+  scope?: string | undefined
 }
 
 export type GroupKeyInput = Parameters<typeof taskReferences>[0] & { trackerRef?: TrackerRefInput | undefined }
@@ -511,15 +513,14 @@ export function capReferenceGroups<G extends Pick<ReferenceGroup, 'rows'>>(
   return capped
 }
 
-/** Every distinct tracker item a grouped list could read a phase signal from — the `trackerRef`
- *  of each group's newest member that carries one, capped (spec A6: 20 per project). */
-export function groupTrackerRefs(runs: readonly RunRecord[], limit = 20): TrackerRefInput[] {
+/** Every distinct tracker item a grouped list could read a phase signal from, newest first. The
+ *  reader caps them (spec A6: 20 per project) AFTER filtering to the configured provider. */
+export function groupTrackerRefs(runs: readonly RunRecord[]): TrackerRefInput[] {
   const byKey = new Map<string, TrackerRefInput>()
   const newestFirst = [...runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   for (const run of newestFirst) {
-    if (!run.trackerRef || byKey.has(`${run.trackerRef.provider}:${run.trackerRef.key}`)) continue
-    byKey.set(`${run.trackerRef.provider}:${run.trackerRef.key}`, run.trackerRef)
-    if (byKey.size >= limit) break
+    const ref = run.trackerRef
+    if (ref && !byKey.has(`${ref.provider}:${ref.key}`)) byKey.set(`${ref.provider}:${ref.key}`, ref)
   }
   return [...byKey.values()]
 }

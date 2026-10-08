@@ -770,7 +770,8 @@ export function TaskQuickListContainer() {
   )
 }
 
-/** Tracker reads exist only for the By PR/issue mode — the attention list never asks. */
+/** Tracker reads exist only for the By PR/issue mode — the attention list never asks. Always the
+ *  same element whatever `enabled` says, so flipping the mode never remounts the list below. */
 export function MaybeTrackerSignals({
   enabled,
   runs,
@@ -780,5 +781,9 @@ export function MaybeTrackerSignals({
   runs: readonly RunRecord[]
   children: React.ReactNode
 }) {
-  return enabled ? <TrackerSignalsProvider runs={runs}>{children}</TrackerSignalsProvider> : <>{children}</>
+  return (
+    <TrackerSignalsProvider runs={runs} enabled={enabled}>
+      {children}
+    </TrackerSignalsProvider>
+  )
 }

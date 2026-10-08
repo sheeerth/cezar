@@ -341,12 +341,13 @@ describe('richer signals (PR B)', () => {
     )
   })
 
-  it('collects distinct tracker refs, newest first, capped', () => {
-    const runs = Array.from({ length: 25 }, (_, i) =>
-      run({ trackerRef: jira(`K-${i % 22}`), createdAt: `2026-10-0${1 + (i % 9)}T00:00:00.000Z` }),
-    )
-    const refs = groupTrackerRefs(runs)
-    expect(refs).toHaveLength(20)
-    expect(new Set(refs.map((ref) => ref.key)).size).toBe(20)
+  it('collects distinct tracker refs, newest first', () => {
+    const runs = [
+      run({ trackerRef: jira('K-1'), createdAt: '2026-10-01T00:00:00.000Z' }),
+      run({ trackerRef: jira('K-2'), createdAt: '2026-10-03T00:00:00.000Z' }),
+      run({ trackerRef: jira('K-1'), createdAt: '2026-10-02T00:00:00.000Z' }),
+      run(),
+    ]
+    expect(groupTrackerRefs(runs).map((ref) => ref.key)).toEqual(['K-2', 'K-1'])
   })
 })

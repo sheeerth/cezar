@@ -148,6 +148,10 @@ export const runTrackerRefSchema = z.object({
   provider: z.enum(['jira', 'linear']),
   key: z.string(),
   url: z.string().url(),
+  /** `trackerReadScope` of the launching association — sent back as `expectedScope` on
+   *  `GET /tracker/:id`, so a re-associated project refuses the read. Absent on legacy provenance
+   *  without an association snapshot, which the cockpit never reads. */
+  scope: z.string().optional(),
 });
 export type RunTrackerRef = z.infer<typeof runTrackerRefSchema>;
 

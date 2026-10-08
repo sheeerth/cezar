@@ -257,14 +257,19 @@ export const queryKeys = {
 
 export const TRACKER_STALE_TIME = 60_000
 
-export function useTrackerConnection() {
-  return useQuery({ queryKey: queryKeys.tracker.connection(), queryFn: ({ signal }) => getTrackerConnection({ signal }) })
+export function useTrackerConnection(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.tracker.connection(),
+    queryFn: ({ signal }) => getTrackerConnection({ signal }),
+    enabled,
+  })
 }
 
-export function useTrackerAssociation() {
+export function useTrackerAssociation(enabled = true) {
   return useQuery({
     queryKey: queryKeys.tracker.association(),
     queryFn: ({ signal }) => getTrackerAssociation({ signal }),
+    enabled,
   })
 }
 
@@ -363,31 +368,42 @@ const TRACKER_SIGNAL_STALE_MS = 10 * 60_000
  * Gated, because each one is a request to a vendor: nothing is asked unless the project HAS a
  * configured tracker connection and association (configuring one in Settings is the opt-in the
  * owner ratified — no `CEZ_*` flag), and only refs from that provider are asked about, with
- * `expectedScope` set so a ref from another source or connection is refused (`source_changed`)
- * rather than read. At most 20 keys; 10-minute cache; no polling and no refetch on focus. Every
+ * `expectedScope` set to the RUN's own launching association, so a ref from another source or
+ * connection is refused (`source_changed`) rather than read. At most 20 keys; 10-minute cache; no polling and no refetch on focus. Every
  * failure — `not_configured`, `unauthorized`, `rate_limited`, `source_changed`, a 404 — is "no
  * signal", never an error.
  */
 export function useTrackerItemSignals(
-  refs: readonly { provider: string; key: string }[],
+  refs: readonly { provider: string; key: string; scope?: string | undefined }[],
+  enabled = true,
 ): (ref: { provider: string; key: string }) => TrackerItemSignal | undefined {
-  const connection = useTrackerConnection()
-  const associationQuery = useTrackerAssociation()
+  // The connection/association reads are the gate itself; they are the same cached queries the
+  // Tracker tab uses, and nothing below them asks a vendor unless both answer.
+  const connection = useTrackerConnection(enabled)
+  const associationQuery = useTrackerAssociation(enabled)
   const association = associationQuery.data?.association ?? null
-  const configured = connection.data?.connection != null && association !== null
-  const keys = configured
-    ? [...new Set(refs.filter((ref) => ref.provider === association.kind).map((ref) => ref.key))].slice(
-        0,
-        TRACKER_SIGNAL_MAX,
-      )
-    : []
-  const scope = association ? trackerReadScope(association) : ''
+  const configured = enabled && connection.data?.connection != null && association !== null
+  // Filter BEFORE the cap, so twenty refs from the other provider cannot crowd out this one's.
+  // A ref without a `scope` (legacy provenance, no association snapshot) is never read.
+  const wanted: { key: string; scope: string }[] = []
+  if (configured) {
+    const seen = new Set<string>()
+    for (const ref of refs) {
+      if (ref.provider !== association.kind || !ref.scope || seen.has(ref.key)) continue
+      seen.add(ref.key)
+      wanted.push({ key: ref.key, scope: ref.scope })
+      if (wanted.length >= TRACKER_SIGNAL_MAX) break
+    }
+  }
   const results = useQueries({
-    queries: keys.map((key) => ({
-      queryKey: ['tracker', queryScope(), 'phase-signal', scope, key] as const,
+    queries: wanted.map(({ key, scope }) => ({
+      // Deliberately OUTSIDE the `['tracker', …]` family: the global stream invalidates that
+      // family on every reconnect and tracker change, which would turn this 10-minute cache into
+      // up to twenty vendor calls per tab focus.
+      queryKey: ['task-phase-tracker', queryScope(), scope, key] as const,
       queryFn: async ({ signal }: { signal: AbortSignal }): Promise<TrackerItemSignal | null> => {
         try {
-          const answer = await getTrackerItem(key, { signal, association: association ?? undefined })
+          const answer = await getTrackerItem(key, { signal, expectedScope: scope })
           return answer.available ? { status: answer.item.status, labels: answer.item.labels } : null
         } catch {
           return null
@@ -400,15 +416,16 @@ export function useTrackerItemSignals(
     })),
   })
   const signature = results.map((result) => `${result.dataUpdatedAt}`).join(',')
+  const wantedSignature = wanted.map((ref) => ref.key).join('|')
   const byKey = useMemo(() => {
     const map = new Map<string, TrackerItemSignal>()
     results.forEach((result, index) => {
-      const key = keys[index]
+      const key = wanted[index]?.key
       if (key !== undefined && result.data) map.set(key, result.data)
     })
     return map
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `signature` + the keys ARE the content
-  }, [signature, keys.join('|')])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the two signatures ARE the content
+  }, [signature, wantedSignature])
   return useCallback(
     (ref: { provider: string; key: string }) =>
       association && ref.provider === association.kind ? byKey.get(ref.key) : undefined,

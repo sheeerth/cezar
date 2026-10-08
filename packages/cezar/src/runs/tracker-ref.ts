@@ -1,3 +1,4 @@
+import { trackerReadScope } from '@open-mercato/cezar-contract';
 import type { RunRecord } from './store.ts';
 
 /**
@@ -11,11 +12,22 @@ export interface RunTrackerRef {
   provider: 'jira' | 'linear';
   key: string;
   url: string;
+  /** `trackerReadScope` of the association that launched the run — the non-secret read identity
+   *  the cockpit sends back as `expectedScope`, so a project re-associated to another source or
+   *  connection refuses the read (`source_changed`) instead of answering for a different item.
+   *  Absent on legacy provenance without an association snapshot: such a ref is never read. */
+  scope?: string;
 }
 
 export function trackerRefOf(run: Pick<RunRecord, 'automationTracker'>): RunTrackerRef | undefined {
   const tracker = run.automationTracker;
-  return tracker ? { provider: tracker.provider, key: tracker.key, url: tracker.url } : undefined;
+  if (!tracker) return undefined;
+  return {
+    provider: tracker.provider,
+    key: tracker.key,
+    url: tracker.url,
+    ...(tracker.association ? { scope: trackerReadScope(tracker.association) } : {}),
+  };
 }
 
 /** `run` plus its `trackerRef`, spread conditionally so `undefined` never reaches the wire. */

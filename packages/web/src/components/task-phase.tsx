@@ -166,12 +166,16 @@ const TrackerSignalsContext = React.createContext<TrackerSignalLookup>(() => und
  */
 export function TrackerSignalsProvider({
   runs,
+  enabled = true,
   children,
 }: {
   runs: readonly RunRecord[]
+  /** Off = nothing is read. A prop rather than mounting the provider conditionally: swapping the
+   *  element above a list remounts it, dropping its search, folds and the toggle's focus. */
+  enabled?: boolean
   children: React.ReactNode
 }) {
-  const trackerOf = useTrackerItemSignals(groupTrackerRefs(runs))
+  const trackerOf = useTrackerItemSignals(enabled ? groupTrackerRefs(runs) : [], enabled)
   return <TrackerSignalsContext.Provider value={trackerOf}>{children}</TrackerSignalsContext.Provider>
 }
 

@@ -136,6 +136,7 @@ describe('workspace runs index API', () => {
     const body = await getIndex();
     const jira = body.runs.find((run) => run.id === 'jira-1');
     const plain = body.runs.find((run) => run.id === 'plain-1');
+    // Legacy provenance without an association snapshot: no `scope`, so the cockpit never reads it.
     expect(jira?.trackerRef).toEqual({ provider: 'jira', key: 'ABC-41', url: 'https://example.atlassian.net/browse/ABC-41' });
     expect(plain && 'trackerRef' in plain).toBe(false);
     // Only the three display fields travel — the receipt and the automation stay server-side.
@@ -155,6 +156,9 @@ describe('workspace runs index API', () => {
       },
     });
     const plain = store.createRun({ title: 'Plain', workflow: 'build', task: 't', steps: [] });
+    // The mutation answers carry it too, so a pin or rename never drops a run out of its group.
+    const pinned = await apiRequest(makeApp(), `/api/v1/runs/${tracked.id}/pin`, { method: 'POST', body: JSON.stringify({ pinned: true }), headers: { 'content-type': 'application/json' } });
+    expect(((await pinned.json()) as { trackerRef?: { key: string } }).trackerRef?.key).toBe('ENG-7');
     const res = await apiRequest(makeApp(), '/api/v1/runs');
     const runs = (await res.json()) as Array<{ id: string; trackerRef?: unknown }>;
     expect(runs.find((run) => run.id === tracked.id)?.trackerRef).toEqual({

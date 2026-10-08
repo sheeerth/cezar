@@ -917,10 +917,16 @@ export async function searchTrackerItems(
   )
 }
 
-export async function getTrackerItem(id: string, opts?: ReadOptions & { association?: TrackerAssociation }): Promise<TrackerItemResponse> {
+export async function getTrackerItem(
+  id: string,
+  opts?: ReadOptions & { association?: TrackerAssociation; expectedScope?: string },
+): Promise<TrackerItemResponse> {
+  // An explicit `expectedScope` (a run's own launching association — task phases) wins over the
+  // current association's, so a re-associated project refuses the read instead of answering it.
+  const expectedScope = opts?.expectedScope ?? (opts?.association ? trackerReadScope(opts.association) : undefined)
   return unwrap(
     await cez.api.v1.p[':projectId'].tracker[':id'].$get(
-      { param: { projectId: queryScope(), id: encodeURIComponent(id) }, query: { expectedScope: opts?.association ? trackerReadScope(opts.association) : undefined } },
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) }, query: { expectedScope } },
       init(opts),
     ),
     `/tracker/${encodeURIComponent(id)}`,
