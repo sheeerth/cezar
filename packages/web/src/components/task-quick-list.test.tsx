@@ -815,3 +815,58 @@ describe('dispatched subtasks in the quick-list', () => {
     expect(kindOf('p')).toBeNull()
   })
 })
+
+describe('TaskQuickList — By PR/issue', () => {
+  const groupEl = (id: string) => document.querySelector(`[data-slot="reference-group"][data-group="${id}"]`) as HTMLElement
+
+  it('renders the default attention buckets unchanged when grouping is not set', () => {
+    renderList({ runs: [run({ status: 'waiting', prNumber: 3 })] })
+    expect(document.querySelector('[data-bucket="Needs you"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="reference-group"]')).toBeNull()
+    expect(document.querySelector('[data-slot="grouping-toggle"]')).toBeNull()
+  })
+
+  it('groups by PR/issue with a phase badge, its source as the tooltip, counts and the attention dot', () => {
+    const waiting = run({ status: 'waiting', prNumber: 12 })
+    const done = run({ status: 'done', prNumber: 12 })
+    const loner = run({ status: 'done' })
+    renderList({ runs: [waiting, done, loner], grouping: 'byReference', onGroupingChange: vi.fn() })
+
+    expect([...document.querySelectorAll('[data-slot="reference-group"]')].map((el) => el.getAttribute('data-group'))).toEqual([
+      'pr#12',
+      'none',
+    ])
+    const pr = groupEl('pr#12')
+    const badge = pr.querySelector('[data-slot="phase-badge"]') as HTMLElement
+    expect(badge.textContent).toBe('Implement')
+    expect(badge.title).toBe('from tasks · implementation work')
+    const header = pr.querySelector('[data-slot="reference-group-header"]') as HTMLElement
+    expect(header.textContent).toContain('#12')
+    expect(header.textContent).toContain('2 tasks · 1 needs you')
+    expect(within(header).getByRole('img', { name: 'needs you' })).not.toBeNull()
+    expect(pr.querySelectorAll('[data-slot="task-row"]')).toHaveLength(2)
+
+    const none = groupEl('none')
+    expect(none.querySelector('[data-slot="phase-badge"]')).toBeNull()
+    expect(none.textContent).toContain('No PR/issue · 1 task')
+  })
+
+  it('folds a group from its header', () => {
+    renderList({ runs: [run({ prNumber: 4 })], grouping: 'byReference', onGroupingChange: vi.fn() })
+    const fold = within(groupEl('pr#4')).getByRole('button', { expanded: true })
+    fireEvent.click(fold)
+    expect(groupEl('pr#4').querySelector('[data-slot="task-row"]')).toBeNull()
+  })
+
+  it('toggles grouping by click and by arrow key', () => {
+    const onGroupingChange = vi.fn()
+    renderList({ runs: [run()], grouping: 'attention', onGroupingChange })
+    const toggle = document.querySelector('[data-slot="grouping-toggle"]') as HTMLElement
+    const byRef = within(toggle).getByRole('button', { name: 'By PR/issue' })
+    expect(within(toggle).getByRole('button', { name: 'Attention' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(byRef)
+    expect(onGroupingChange).toHaveBeenLastCalledWith('byReference')
+    fireEvent.keyDown(within(toggle).getByRole('button', { name: 'Attention' }), { key: 'ArrowRight' })
+    expect(onGroupingChange).toHaveBeenLastCalledWith('byReference')
+  })
+})

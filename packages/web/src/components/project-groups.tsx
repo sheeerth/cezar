@@ -22,15 +22,16 @@ import { useLocation } from 'react-router'
 import { useHealth, usePinRun, useProjectRuns } from '@/api/queries'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
-import { useListView } from '@/components/list-view'
+import { useListGrouping, useListView, type ListGrouping } from '@/components/list-view'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { ReferenceStatusProvider } from '@/components/reference-status'
-import { QuickListBuckets } from '@/components/task-quick-list'
+import { QuickListBuckets, QuickListReferenceGroups } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
 import { moveProjectId, orderProjects } from '@/lib/project-order'
 import { isProjectCollapsed, readStoredCollapsed, writeStoredCollapsed } from '@/lib/sidebar-collapse'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
+import { capReferenceGroups, groupByReference, groupStatusRequests } from '@/lib/task-phases'
 import { useProjectOrder } from '@/lib/use-project-order'
 import { taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
@@ -147,6 +148,8 @@ export function ProjectGroups({
   // One filter for the whole cockpit (`ListViewProvider`): switching the Tasks table to Archived
   // switches every group with it, rather than leaving the sidebar answering a different question.
   const [view] = useListView()
+  // The grouping is shared the same way — By PR/issue on the Tasks page is By PR/issue here.
+  const [grouping] = useListGrouping()
   const activeTo = activeNavPath(stripProjectPrefix(pathname))
   const runMatch = useProjectMatch('/tasks/:id/*')
   const runExact = useProjectMatch('/tasks/:id')
@@ -238,6 +241,7 @@ export function ProjectGroups({
       onToggle={toggle}
       onSelect={expand}
       view={view}
+      grouping={grouping}
       activeTo={activeTo}
       currentRunId={currentRunId}
       now={now}
@@ -344,6 +348,7 @@ function ProjectGroup({
   onToggle,
   onSelect,
   view,
+  grouping,
   activeTo,
   currentRunId,
   now,
@@ -368,6 +373,7 @@ function ProjectGroup({
    *  the project you just moved into is never selected-but-shut. */
   onSelect: (projectId: string) => void
   view: ListView
+  grouping: ListGrouping
   /** The `to` of the nav item that owns the current URL — applied to the ACTIVE group only. */
   activeTo: string | null
   currentRunId: string | null
@@ -439,7 +445,13 @@ function ProjectGroup({
   )
 
   const waiting = runs.data ? listCounts(runs.data).waiting : 0
-  const buckets = runs.data ? capBuckets(groupRuns(runs.data, view), RECENT_LIMIT) : []
+  const byReference = grouping === 'byReference'
+  const buckets = runs.data && !byReference ? capBuckets(groupRuns(runs.data, view), RECENT_LIMIT) : []
+  // By PR/issue: the same ten-row cap, counted across reference groups. Grouped once here without
+  // statuses (keys never depend on them) only to know what to ask the forge about — every group's
+  // key, which can come from a child row the cap hid, plus the chips of the rows on screen.
+  const referenceGroups =
+    runs.data && byReference ? capReferenceGroups(groupByReference(runs.data, view), RECENT_LIMIT) : []
   // Only the rows this group actually paints: `buckets` is the capped list, so a project with
   // four hundred runs asks about the handful on screen rather than all of them.
   //
@@ -447,17 +459,20 @@ function ProjectGroup({
   // `useMemo` keyed on it would recompute every time anyway while claiming otherwise. Nothing
   // downstream needs a stable identity — `ReferenceStatusProvider` and `useReferenceStatuses` both
   // key off the CONTENT of this list.
-  const referenceRequests = buckets.flatMap((bucket) =>
-    bucket.rows.flatMap((row) => {
-      // A collapsed variant group paints its FIRST member's chip, so that is the one to ask
-      // about — the others only become visible once the tile is expanded.
-      return taskReferences(row.kind === 'run' ? row.run : row.members[0]!).map((reference) => ({
-        projectId: project.id,
-        kind: reference.kind,
-        number: reference.number,
-      }))
-    }),
-  )
+  const referenceRequests = [
+    ...groupStatusRequests(referenceGroups).map((ref) => ({ projectId: project.id, ...ref })),
+    ...[...buckets, ...referenceGroups].flatMap((bucket) =>
+      bucket.rows.flatMap((row) => {
+        // A collapsed variant group paints its FIRST member's chip, so that is the one to ask
+        // about — the others only become visible once the tile is expanded.
+        return taskReferences(row.kind === 'run' ? row.run : row.members[0]!).map((reference) => ({
+          projectId: project.id,
+          kind: reference.kind,
+          number: reference.number,
+        }))
+      }),
+    ),
+  ]
 
   // A missing project's panes all 409 (spec, "Registered project folder deleted/moved"), so
   // there is nothing behind the chevron — the row renders greyed and inert rather than
@@ -688,21 +703,37 @@ function ProjectGroup({
           {/* This group's own project, explicitly: a collapsed sidebar can show six projects at
               once, and #42 means a different pull request in each of them. */}
           <ReferenceStatusProvider projectId={project.id} requests={referenceRequests}>
-            <QuickListBuckets
-              buckets={buckets}
-              currentRunId={active ? currentRunId : null}
-              now={now}
-              scope={project.id}
-              showTokens={showTokens}
-              showCost={showCost}
-              onTogglePin={
-                // Withheld in the archived view, where the pin has nowhere to show its result —
-                // the same call `TaskQuickList` and the thread header make.
-                view === 'archived'
-                  ? undefined
-                  : onTogglePin
-              }
-            />
+            {byReference ? (
+              runs.data ? (
+                <QuickListReferenceGroups
+                  runs={runs.data}
+                  view={view}
+                  limit={RECENT_LIMIT}
+                  currentRunId={active ? currentRunId : null}
+                  now={now}
+                  scope={project.id}
+                  showTokens={showTokens}
+                  showCost={showCost}
+                  onTogglePin={view === 'archived' ? undefined : onTogglePin}
+                />
+              ) : null
+            ) : (
+              <QuickListBuckets
+                buckets={buckets}
+                currentRunId={active ? currentRunId : null}
+                now={now}
+                scope={project.id}
+                showTokens={showTokens}
+                showCost={showCost}
+                onTogglePin={
+                  // Withheld in the archived view, where the pin has nowhere to show its result —
+                  // the same call `TaskQuickList` and the thread header make.
+                  view === 'archived'
+                    ? undefined
+                    : onTogglePin
+                }
+              />
+            )}
           </ReferenceStatusProvider>
 
           {/* Always present, not only past the cap: it is this group's door into the project's
