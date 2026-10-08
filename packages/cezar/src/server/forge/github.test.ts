@@ -2375,6 +2375,23 @@ describe('fetchRefStatuses', () => {
     expect(out[3]).toEqual({ kind: 'issue', status: 'not-planned' });
   });
 
+  it('asks for labels on both arms and carries label names only when a node has any', async () => {
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({
+        r0: prNode({ labels: { nodes: [{ name: 'review' }, { name: 'qa' }] } }),
+        r1: issueNode({ labels: { nodes: [{ name: 'needs-spec' }] } }),
+        r2: prNode({ labels: { nodes: [] } }),
+      });
+    });
+    const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7, 3, 9]);
+    expect(sent.match(/labels\(first: 20\) \{ nodes \{ name \} \}/g)).toHaveLength(6);
+    expect(out[7]?.labels).toEqual(['review', 'qa']);
+    expect(out[3]).toEqual({ kind: 'issue', status: 'open', labels: ['needs-spec'] });
+    expect(out[9] && 'labels' in out[9]).toBe(false);
+  });
+
   it('files a number the CALLER thought was a PR under the kind it really is', async () => {
     // The screenshot bug's other half: a bare `#774` in a task can be inferred as either kind, and
     // asking `issue(number:)` about a pull request is a question GitHub answers with an error.
@@ -2707,6 +2724,26 @@ describe('fetchGithubRefStatus', () => {
     const second = await fetchGithubRefStatus('/repo/ref-status-cache', { prs: [7] });
     expect(second.available && second.prs[7]).toBe('merged');
     expect(execFileMock.mock.calls.length).toBe(calls); // nothing spawned the second time
+  });
+
+  it('answers a labels map only for numbers that carry labels, and no key at all otherwise', async () => {
+    stubGh(
+      JSON.stringify({
+        data: {
+          repository: {
+            r0: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, commits: { nodes: [] }, labels: { nodes: [{ name: 'in review' }] } },
+            r1: { __typename: 'Issue', state: 'OPEN', stateReason: null },
+          },
+        },
+      }),
+    );
+    const answer = await fetchGithubRefStatus('/repo/ref-status-labels', { prs: [7], issues: [8] });
+    expect(answer.available && answer.labels).toEqual({ 7: ['in review'] });
+
+    __clearRefStatusCacheForTests();
+    stubGh(JSON.stringify({ data: { repository: { r0: { __typename: 'Issue', state: 'OPEN', stateReason: null } } } }));
+    const bare = await fetchGithubRefStatus('/repo/ref-status-no-labels', { issues: [8] });
+    expect(bare.available && 'labels' in bare).toBe(false);
   });
 
   it('names the conflicting pull requests beside the statuses, and only those', async () => {

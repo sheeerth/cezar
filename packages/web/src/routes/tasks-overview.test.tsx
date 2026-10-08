@@ -1311,3 +1311,84 @@ describe('dispatched subtasks nest under their parent', () => {
     expect(kindOf(card('p'))).toBeNull()
   })
 })
+
+describe('TasksOverview — By PR/issue', () => {
+  const sectionIds = () =>
+    [...document.querySelectorAll('[data-slot="tasks-table"] [data-slot="reference-group"]')].map((el) =>
+      el.getAttribute('data-group'),
+    )
+
+  it('keeps the flat attention table when grouping is attention', () => {
+    renderOverview({ runs: [run({ prNumber: 3 })], grouping: 'attention', onGroupingChange: vi.fn() })
+    expect(document.querySelector('[data-slot="reference-group"]')).toBeNull()
+    expect(document.querySelector('[data-slot="phase-filter"]')).toBeNull()
+  })
+
+  it('renders one section per PR/issue, children nested, "No PR/issue" last — table and cards alike', () => {
+    const parent = run({ id: 'p', prNumber: 12, status: 'review' })
+    const kid = run({
+      id: 'k',
+      status: 'done',
+      dispatch: { parentRunId: 'p', rootRunId: 'p', kind: 'implement' } as RunRecord['dispatch'],
+    })
+    const loner = run({ id: 'l' })
+    renderOverview({ runs: [loner, kid, parent], grouping: 'byReference', onGroupingChange: vi.fn() })
+
+    expect(sectionIds()).toEqual(['pr#12', 'none'])
+    const pr = document.querySelector('[data-slot="tasks-table"] [data-group="pr#12"]') as HTMLElement
+    expect(pr.querySelector('[data-slot="phase-badge"]')?.textContent).toBe('Review')
+    expect(pr.querySelector('[data-run-id="p"]')).not.toBeNull()
+    // Dispatched children stay folded under their parent by default (#1110) — and in the group.
+    fireEvent.click(within(pr).getByRole('button', { name: /1 subtask/ }))
+    expect(pr.querySelector('[data-run-id="k"]')?.getAttribute('data-depth')).toBe('1')
+    const cards = [...document.querySelectorAll('[data-slot="task-cards"] [data-slot="reference-group"]')].map((el) =>
+      el.getAttribute('data-group'),
+    )
+    expect(cards).toEqual(['pr#12', 'none'])
+  })
+
+  it('filters whole groups by phase with counts, shows an empty state with Clear, and resets on remount', () => {
+    const runs = [run({ prNumber: 1, status: 'review' }), run({ prNumber: 2 }), run()]
+    const first = renderOverview({ runs, grouping: 'byReference', onGroupingChange: vi.fn() })
+    const chips = document.querySelector('[data-slot="phase-filter"]') as HTMLElement
+    expect(within(chips).getByRole('button', { name: /Review/ }).textContent).toBe('Review1')
+    expect(within(chips).getByRole('button', { name: /All/ }).textContent).toBe('All3')
+
+    fireEvent.click(within(chips).getByRole('button', { name: /Review/ }))
+    expect(sectionIds()).toEqual(['pr#1'])
+
+    fireEvent.click(within(chips).getByRole('button', { name: /Delivery/ }))
+    expect(screen.getByText('No PR/issue groups in Delivery')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(sectionIds()).toEqual(['pr#1', 'pr#2', 'none'])
+
+    fireEvent.click(within(chips).getByRole('button', { name: /No PR\/issue/ }))
+    expect(sectionIds()).toEqual(['none'])
+    first.unmount()
+
+    renderOverview({ runs, grouping: 'byReference', onGroupingChange: vi.fn() })
+    expect(sectionIds()).toEqual(['pr#1', 'pr#2', 'none'])
+  })
+
+  it('narrows groups to the search without changing their phase', () => {
+    const runs = [
+      run({ title: 'alpha', prNumber: 5, status: 'review' }),
+      run({ title: 'beta', prNumber: 5 }),
+      run({ title: 'gamma', prNumber: 6 }),
+    ]
+    renderOverview({ runs, grouping: 'byReference', onGroupingChange: vi.fn() })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks' }), { target: { value: 'beta' } })
+    expect(sectionIds()).toEqual(['pr#5'])
+    const pr = document.querySelector('[data-slot="tasks-table"] [data-group="pr#5"]') as HTMLElement
+    expect(pr.querySelector('[data-slot="phase-badge"]')?.textContent).toBe('Review')
+    expect(pr.querySelectorAll('[data-slot="task-table-row"]')).toHaveLength(1)
+  })
+
+  it('renders the shared toggle and reports a change', () => {
+    const onGroupingChange = vi.fn()
+    renderOverview({ runs: [run()], grouping: 'attention', onGroupingChange })
+    const toggle = document.querySelector('header [data-slot="grouping-toggle"]') as HTMLElement
+    fireEvent.click(within(toggle).getByRole('button', { name: 'By PR/issue' }))
+    expect(onGroupingChange).toHaveBeenCalledWith('byReference')
+  })
+})

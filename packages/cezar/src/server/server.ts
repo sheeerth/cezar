@@ -3,6 +3,7 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
 } from '@open-mercato/cezar-contract';
+import { trackerRefOf, withTrackerRef, type RunTrackerRef } from '../runs/tracker-ref.ts';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
@@ -4021,9 +4022,13 @@ export function createApp(deps: ServerDeps) {
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
   // run's live process tree — absent for finished runs and when `ps` yields
   // nothing. The stored record itself is never touched.
-  const withUsage = (run: RunRecord): RunRecord & { usage?: ReturnType<typeof currentUsage> } => {
+  // Plus the display-only `trackerRef` (task phases, step 9), projected from `automationTracker`.
+  const withUsage = (
+    run: RunRecord,
+  ): RunRecord & { usage?: ReturnType<typeof currentUsage>; trackerRef?: RunTrackerRef } => {
     const usage = currentUsage(run.id);
-    return usage ? { ...run, usage } : run;
+    const projected = withTrackerRef(run);
+    return usage ? { ...projected, usage } : projected;
   };
 
   // The inbox half of a composer launch (#374). Since the cockpit's "▶ Run"
@@ -4068,7 +4073,7 @@ export function createApp(deps: ServerDeps) {
       // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
       const run = store.setArchived(id, parsed.data.archived !== false);
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withTrackerRef(run)) : c.json({ error: 'not found' }, 404);
     })
 
     // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
@@ -4078,7 +4083,7 @@ export function createApp(deps: ServerDeps) {
     .post('/runs/:id/pin', jsonZodValidator(pinSchema, { absent: ({}) }), (c) => {
       const { store } = c.get('project');
       const run = store.setPinned(c.req.param('id'), c.req.valid('json').pinned !== false);
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withTrackerRef(run)) : c.json({ error: 'not found' }, 404);
     })
 
     // The per-task off switch for that resume (the workspace setting is Settings → Resources).
@@ -4096,7 +4101,7 @@ export function createApp(deps: ServerDeps) {
       // No body: opening a thread marks it read, full stop. Stamps `seenAt = now` and
       // returns the updated record (which also rides the `run` SSE via `touch`).
       const run = c.get('project').store.setRead(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withTrackerRef(run)) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs/:id/unread', (c) => {
@@ -4104,7 +4109,7 @@ export function createApp(deps: ServerDeps) {
       // receipt is the whole action, so there is nothing to say about it. Sits under
       // `/runs/:id/`, so the `read-all` registration-order caveat above does not apply.
       const run = c.get('project').store.setUnread(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withTrackerRef(run)) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs', jsonZodValidator(startRunSchema), async (c) => {
@@ -4256,7 +4261,8 @@ export function createApp(deps: ServerDeps) {
           titleOrigin: 'user',
         });
       }
-      return c.json(store.getRun(id));
+      const patched = store.getRun(id);
+      return c.json(patched ? withTrackerRef(patched) : patched);
     })
 
     .post('/runs/:id/cancel', (c) => {
@@ -5316,7 +5322,7 @@ export function createApp(deps: ServerDeps) {
         };
         const onRun = (run: RunRecord) => {
           if (run.id !== id) return;
-          void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
+          void stream.writeSSE({ event: 'run', data: JSON.stringify(withTrackerRef(run)) });
         };
         store.on('event', onEvent);
         store.on('run', onRun);
@@ -5339,7 +5345,7 @@ export function createApp(deps: ServerDeps) {
           if (event.seq > maxSeq) await writeEvent(event);
         }
         const run = store.getRun(id);
-        if (run) await stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
+        if (run) await stream.writeSSE({ event: 'run', data: JSON.stringify(withTrackerRef(run)) });
 
         while (!stream.aborted) {
           await stream.writeSSE({ event: 'ping', data: '' });
@@ -5357,7 +5363,7 @@ export function createApp(deps: ServerDeps) {
     .get('/events', (c) => {
       const { dataDir, store } = c.get('project');
       return streamSSENoBuffer(c, async (stream) => {
-        const onRun = (run: RunRecord) => void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
+        const onRun = (run: RunRecord) => void stream.writeSSE({ event: 'run', data: JSON.stringify(withTrackerRef(run)) });
         const onDeleted = (id: string) =>
           void stream.writeSSE({
             event: 'run-deleted',
@@ -5414,7 +5420,7 @@ export function createApp(deps: ServerDeps) {
           const onRun = (run: RunRecord) =>
             void stream.writeSSE({
               event: 'run',
-              data: JSON.stringify({ ...run, project }),
+              data: JSON.stringify({ ...withTrackerRef(run), project }),
             });
           const onDeleted = (id: string) =>
             void stream.writeSSE({
@@ -6270,6 +6276,7 @@ export function createApp(deps: ServerDeps) {
 
   const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => {
     const usage = currentUsage(run.id);
+    const trackerRef = trackerRefOf(run);
     return {
     projectId,
     id: run.id,
@@ -6307,6 +6314,9 @@ export function createApp(deps: ServerDeps) {
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
+    // Display-only tracker provenance (task phases, step 9) — the reference a Jira/Linear task
+    // groups under when it knows no GitHub number.
+    ...(trackerRef ? { trackerRef } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
     ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
     ...(run.peakProcCount !== undefined ? { peakProcCount: run.peakProcCount } : {}),

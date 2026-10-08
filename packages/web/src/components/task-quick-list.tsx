@@ -4,10 +4,11 @@ import { useHealth, usePinRun, useReferenceProjectId, useRunsForProject } from '
 import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { useListView } from '@/components/list-view'
+import { useListGrouping, useListView, type ListGrouping } from '@/components/list-view'
 import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
+import { GroupingToggle, ReferenceGroupHeader, TrackerSignalsProvider, useGroupPhaseLookups } from '@/components/task-phase'
 import { StatusDot } from '@/components/status-dot'
 import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
@@ -25,6 +26,7 @@ import {
   type QuickListRow,
 } from '@/lib/task-groups'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
+import { groupByReference, type ReferenceGroup } from '@/lib/task-phases'
 import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
@@ -47,10 +49,16 @@ export function TaskQuickList({
   showTokens = true,
   showCost = true,
   onTogglePin,
+  grouping = 'attention',
+  onGroupingChange,
 }: {
   runs: RunRecord[]
   view: ListView
   onViewChange: (view: ListView) => void
+  /** Attention buckets (the default) or By PR/issue (spec 2026-10-07-task-phases-by-pr-issue). */
+  grouping?: ListGrouping
+  /** Absent = no toggle rendered (a bare render keeps exactly the pre-mode list). */
+  onGroupingChange?: (grouping: ListGrouping) => void
   /** The run open at `/tasks/:id`, so its row can show as active. */
   currentRunId?: string | null
   /** Injected so the ages are not racing the clock in tests. */
@@ -63,7 +71,8 @@ export function TaskQuickList({
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   const counts = listCounts(runs)
-  const buckets = groupRuns(runs, view)
+  const byReference = grouping === 'byReference'
+  const buckets = byReference ? [] : groupRuns(runs, view)
   // Withheld in the archived view, where `groupRuns` answers one `Archived` bucket and never
   // reads `run.pinned` — the same call the thread header makes on an archived run.
   const pinToggle = view === 'archived' ? undefined : onTogglePin
@@ -85,9 +94,22 @@ export function TaskQuickList({
             Archived
           </ViewTab>
         </div>
+        {onGroupingChange ? (
+          <GroupingToggle grouping={grouping} onChange={onGroupingChange} className="mt-1 flex w-full" />
+        ) : null}
       </div>
 
-      {buckets.length === 0 ? (
+      {byReference ? (
+        <QuickListReferenceGroups
+          runs={runs}
+          view={view}
+          currentRunId={currentRunId}
+          now={now}
+          showTokens={showTokens}
+          showCost={showCost}
+          onTogglePin={pinToggle}
+        />
+      ) : buckets.length === 0 ? (
         <p className="px-3 py-3.5 text-xs text-soft-foreground">
           {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
         </p>
@@ -163,6 +185,105 @@ export function QuickListBuckets({
           ))}
         </div>
       ))}
+    </>
+  )
+}
+
+/**
+ * The quick-list's "By PR/issue" mode: the attention buckets are replaced by one group per PR or
+ * issue, each headed by its derived phase (spec `2026-10-07-task-phases-by-pr-issue`). Grouping
+ * itself is `groupByReference`; this paints headers and reuses the bucket list's own rows.
+ */
+export function QuickListReferenceGroups({
+  runs,
+  view,
+  limit,
+  currentRunId = null,
+  now = Date.now(),
+  scope = null,
+  showTokens = true,
+  showCost = true,
+  onTogglePin,
+}: {
+  runs: readonly RunRecord[]
+  view: ListView
+  /** Rows across groups (the multi-project sidebar's ten). Absent = every row. */
+  limit?: number
+  currentRunId?: string | null
+  now?: number
+  scope?: string | null
+  showTokens?: boolean
+  showCost?: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
+}) {
+  const lookups = useGroupPhaseLookups()
+  const groups = groupByReference(runs, view, lookups)
+  const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
+  const [folded, setFolded] = React.useState<ReadonlySet<string>>(() => new Set())
+  const toggle = (setter: typeof setExpanded) => (id: string) =>
+    setter((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  const toggleGroup = toggle(setExpanded)
+  const toggleFold = toggle(setFolded)
+
+  if (groups.length === 0) {
+    return (
+      <p className="px-3 py-3.5 text-xs text-soft-foreground">
+        {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
+      </p>
+    )
+  }
+
+  // The cap counts rows across groups, in group order; a group cut short says how many it lost.
+  let remaining = limit ?? Number.POSITIVE_INFINITY
+  const painted: { group: ReferenceGroup; rows: QuickListRow[]; hidden: number }[] = []
+  for (const group of groups) {
+    if (remaining <= 0) break
+    const rows = group.rows.slice(0, remaining)
+    remaining -= rows.length
+    painted.push({ group, rows, hidden: group.rows.length - rows.length })
+  }
+
+  return (
+    <>
+      {painted.map(({ group, rows, hidden }) => {
+        const isFolded = folded.has(group.id)
+        return (
+          <div key={group.id} data-slot="reference-group" data-group={group.id} data-phase={group.phase ?? 'none'}>
+            <ReferenceGroupHeader group={group} folded={isFolded} onToggle={() => toggleFold(group.id)} />
+            {isFolded
+              ? null
+              : nestRows(rows).map((node) => (
+                  <Row
+                    key={node.run.id}
+                    row={node.run.row}
+                    depth={node.depth}
+                    childCount={node.childCount}
+                    currentRunId={currentRunId}
+                    now={now}
+                    scope={scope}
+                    showTokens={showTokens}
+                    showCost={showCost}
+                    expanded={node.run.row.kind === 'group' && expanded.has(node.run.row.groupId)}
+                    onToggle={toggleGroup}
+                    onTogglePin={onTogglePin}
+                  />
+                ))}
+            {hidden > 0 && !isFolded ? (
+              <Link
+                to={scopeTo(scope, '/')}
+                data-slot="reference-group-more"
+                className="flex h-7 items-center rounded-md px-3 text-[11.5px] text-muted-foreground hover:text-foreground"
+              >
+                +{hidden} more
+              </Link>
+            ) : null}
+          </div>
+        )
+      })}
     </>
   )
 }
@@ -592,6 +713,7 @@ export function TaskQuickListContainer() {
   const pinMutation = usePinRun()
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
+  const [grouping, setGrouping] = useListGrouping()
   // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
@@ -627,19 +749,41 @@ export function TaskQuickListContainer() {
 
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
-      <TaskQuickList
-        runs={runs.data}
-        view={view}
-        onViewChange={setView}
-        // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
-        currentRunId={match?.params.id ?? exact?.params.id ?? null}
-        now={now}
-        showTokens={visibility.tokens}
-        showCost={visibility.cost}
-        // This list is the ACTIVE project's, so the mutation needs no explicit project: the
-        // scoped client already addresses the one the URL names.
-        onTogglePin={onTogglePin}
-      />
+      <MaybeTrackerSignals enabled={grouping === 'byReference'} runs={runs.data}>
+        <TaskQuickList
+          runs={runs.data}
+          view={view}
+          onViewChange={setView}
+          grouping={grouping}
+          onGroupingChange={setGrouping}
+          // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
+          currentRunId={match?.params.id ?? exact?.params.id ?? null}
+          now={now}
+          showTokens={visibility.tokens}
+          showCost={visibility.cost}
+          // This list is the ACTIVE project's, so the mutation needs no explicit project: the
+          // scoped client already addresses the one the URL names.
+          onTogglePin={onTogglePin}
+        />
+      </MaybeTrackerSignals>
     </ReferenceStatusProvider>
+  )
+}
+
+/** Tracker reads exist only for the By PR/issue mode — the attention list never asks. Always the
+ *  same element whatever `enabled` says, so flipping the mode never remounts the list below. */
+export function MaybeTrackerSignals({
+  enabled,
+  runs,
+  children,
+}: {
+  enabled: boolean
+  runs: readonly RunRecord[]
+  children: React.ReactNode
+}) {
+  return (
+    <TrackerSignalsProvider runs={runs} enabled={enabled}>
+      {children}
+    </TrackerSignalsProvider>
   )
 }

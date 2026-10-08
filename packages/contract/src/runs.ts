@@ -139,6 +139,23 @@ export const processUsageSchema = z.object({
 export type ProcessUsage = z.infer<typeof processUsageSchema>;
 
 /**
+ * Display-only tracker provenance (spec 2026-10-07-task-phases-by-pr-issue, step 9), projected by
+ * the run routes, the run SSE events and the runs index from the persisted `automationTracker` —
+ * present only when the record carries that provenance (a task a Jira/Linear automation launched).
+ * The association, receipt and event stay server-side.
+ */
+export const runTrackerRefSchema = z.object({
+  provider: z.enum(['jira', 'linear']),
+  key: z.string(),
+  url: z.string().url(),
+  /** `trackerReadScope` of the launching association — sent back as `expectedScope` on
+   *  `GET /tracker/:id`, so a re-associated project refuses the read. Absent on legacy provenance
+   *  without an association snapshot, which the cockpit never reads. */
+  scope: z.string().optional(),
+});
+export type RunTrackerRef = z.infer<typeof runTrackerRefSchema>;
+
+/**
  * The stored run record, as `runs.json` holds it (`src/runs/store.ts`).
  *
  * `archived` is required although the store schema defaults it: a default fills on PARSE, so the
@@ -256,6 +273,9 @@ export const runRecordSchema = z.object({
   /** References the agent declared via CEZ:PR/CEZ:ISSUE markers — authoritative over the namer
    *  for the matching kind. */
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
+  /** Display-only tracker reference (task phases, step 9) — see `runTrackerRefSchema`. Never
+   *  persisted under this name: the routes project it from `automationTracker` on the way out. */
+  trackerRef: runTrackerRefSchema.optional(),
   /** The referenced tier's working set (distinct PR URLs spotted, capped server-side). */
   referencedPrCandidates: z.array(z.string()).optional(),
   /** The issue this task is ABOUT (spec 2026-07-21-report-ref-discovery). Display-only. */
@@ -405,6 +425,8 @@ export const runIndexEntrySchema = z.object({
   issueNumber: z.number().optional(),
   referencedIssueUrl: z.string().optional(),
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
+  /** Display-only tracker reference — see `runTrackerRefSchema`. */
+  trackerRef: runTrackerRefSchema.optional(),
   /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
    *  cockpit prints an em dash rather than claiming a measurement that never happened. */
   costUsd: z.number().optional(),

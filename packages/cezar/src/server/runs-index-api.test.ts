@@ -114,6 +114,61 @@ describe('workspace runs index API', () => {
     contexts.disposeAll();
   });
 
+  it('projects a display-only trackerRef from automationTracker, and no key without it (task phases)', async () => {
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'jira-1',
+        title: 'From Jira',
+        automationTracker: {
+          automationId: 'a1',
+          automationRevision: 1,
+          receiptId: 'rc1',
+          provider: 'jira',
+          key: 'ABC-41',
+          url: 'https://example.atlassian.net/browse/ABC-41',
+        },
+      }),
+      storedRun({ id: 'plain-1', title: 'By hand' }),
+    ]);
+
+    const body = await getIndex();
+    const jira = body.runs.find((run) => run.id === 'jira-1');
+    const plain = body.runs.find((run) => run.id === 'plain-1');
+    // Legacy provenance without an association snapshot: no `scope`, so the cockpit never reads it.
+    expect(jira?.trackerRef).toEqual({ provider: 'jira', key: 'ABC-41', url: 'https://example.atlassian.net/browse/ABC-41' });
+    expect(plain && 'trackerRef' in plain).toBe(false);
+    // Only the three display fields travel — the receipt and the automation stay server-side.
+    expect(JSON.stringify(jira)).not.toContain('rc1');
+  });
+
+  it('GET /runs carries trackerRef beside the record for a tracker-launched run only', async () => {
+    const tracked = store.createRun({ title: 'Tracked', workflow: 'build', task: 't', steps: [] });
+    store.updateRun(tracked.id, {
+      automationTracker: {
+        automationId: 'a1',
+        automationRevision: 1,
+        receiptId: 'rc1',
+        provider: 'linear',
+        key: 'ENG-7',
+        url: 'https://linear.app/acme/issue/ENG-7',
+      },
+    });
+    const plain = store.createRun({ title: 'Plain', workflow: 'build', task: 't', steps: [] });
+    // The mutation answers carry it too, so a pin or rename never drops a run out of its group.
+    const pinned = await apiRequest(makeApp(), `/api/v1/runs/${tracked.id}/pin`, { method: 'POST', body: JSON.stringify({ pinned: true }), headers: { 'content-type': 'application/json' } });
+    expect(((await pinned.json()) as { trackerRef?: { key: string } }).trackerRef?.key).toBe('ENG-7');
+    const res = await apiRequest(makeApp(), '/api/v1/runs');
+    const runs = (await res.json()) as Array<{ id: string; trackerRef?: unknown }>;
+    expect(runs.find((run) => run.id === tracked.id)?.trackerRef).toEqual({
+      provider: 'linear',
+      key: 'ENG-7',
+      url: 'https://linear.app/acme/issue/ENG-7',
+    });
+    expect('trackerRef' in (runs.find((run) => run.id === plain.id) ?? {})).toBe(false);
+  });
+
   it('sends the slim row — no steps, and optional keys absent rather than null', async () => {
     await registerProject(repoRoot);
     await registerProject(otherRoot);

@@ -198,6 +198,14 @@ export const githubRefStatusDataSchema = z.discriminatedUnion('available', [
      * also what it answers while it is still computing) is never listed.
      */
     conflicts: z.array(z.number()).optional(),
+    /**
+     * Label names for every PR/issue in the batch that has any (spec
+     * 2026-10-07-task-phases-by-pr-issue, step 8) — the cockpit reads them as a phase signal.
+     * Rides the same GraphQL node as the status, so it costs no extra request. Optional on the
+     * wire: absent means no labels are known, which is also what a server from before the field
+     * sends.
+     */
+    labels: z.record(z.number(), z.array(z.string()).max(20)).optional(),
     recheckAfterMs: recheckAfterMsSchema,
   }),
   z.object({
