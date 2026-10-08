@@ -196,6 +196,23 @@ into the parent session.
 cezar limits a parent to four children in flight; when a parent has a budget,
 its children share that budget. Nothing auto-merges.
 
+## Supervise tasks from Claude Code (`cez mcp`)
+
+`cez mcp` is an MCP server over stdio, so an agent outside cezar — your own
+Claude Code session — can start tasks, wait for them, read their status,
+conversation and diff, and reply, continue or cancel, while `cez serve` runs in
+the background. Register it once:
+
+```json
+{ "mcpServers": { "cezar": { "command": "cez", "args": ["mcp"] } } }
+```
+
+It finds the running cockpit on its own and adds no route, state or setting.
+Inside a cezar task it only offers its read tools; agents there delegate with
+`cez task`. Running this fork's build: `npm run build`, then `npm link` in
+`packages/cezar` so the global `cez` is this build. Tools and details:
+[docs/reference.md](docs/reference.md#supervising-tasks-from-an-mcp-client-cez-mcp).
+
 ## Documentation
 
 The [reference](docs/reference.md) covers everything else:

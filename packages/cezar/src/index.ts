@@ -52,6 +52,7 @@ Usage:
   cezar run "<task>"        run a task headless in the terminal
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
+  cezar mcp [--url <u>] [--read-only]  MCP server (stdio) so an MCP client (e.g. Claude Code) can supervise tasks on a running cockpit
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -112,6 +113,14 @@ async function main(): Promise<void> {
   // `cez automation …` (spec 2026-09-13-automations-from-prompt): same shape, same reason.
   if (process.argv[2] === 'automation') {
     process.exitCode = await runAutomationCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez mcp` (spec 2026-10-06-cez-mcp): an MCP server over stdio for agents OUTSIDE cezar.
+  // Lazily imported, so `cez serve` never loads the MCP SDK; the process then lives as long as
+  // the client keeps stdin open.
+  if (process.argv[2] === 'mcp') {
+    const { runMcpCommand } = await import('./mcp/index.ts');
+    process.exitCode = await runMcpCommand(process.argv.slice(3), process.env, undefined, readOwnVersion());
     return;
   }
   const { values, positionals } = parseArgs({
