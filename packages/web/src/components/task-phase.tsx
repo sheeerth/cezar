@@ -1,7 +1,11 @@
+import { ChevronDownIcon } from 'lucide-react'
 import * as React from 'react'
 
 import type { ListGrouping } from '@/components/list-view'
-import type { TaskPhase } from '@/lib/task-phases'
+import { ReferenceChip } from '@/components/reference-chip'
+import { useReferenceStatusLookup } from '@/components/reference-status'
+import { StatusDot } from '@/components/status-dot'
+import type { PhaseLookups, ReferenceGroup, TaskPhase } from '@/lib/task-phases'
 import { cn } from '@/lib/utils'
 
 /**
@@ -75,7 +79,7 @@ export function GroupingToggle({
 /** Four distinct tones, and always the word as well — never colour alone. */
 const PHASE_TONE: Record<TaskPhase, string> = {
   plan: 'bg-muted text-soft-foreground',
-  implement: 'bg-pending/15 text-pending',
+  implement: 'bg-pending/15 text-pending-strong',
   review: 'bg-violet/15 text-violet',
   delivery: 'bg-success/15 text-success',
 }
@@ -120,3 +124,82 @@ export function PhaseBadge({
     </span>
   )
 }
+
+/**
+ * The forge lookups a grouped list needs, read from the surrounding `ReferenceStatusProvider` —
+ * the same cache every chip on the surface reads, so a group's phase and its chip can never
+ * disagree about a PR's status. Outside a provider nothing is known and the tasks decide.
+ */
+export function useGroupPhaseLookups(): PhaseLookups {
+  const { lookup, projectId } = useReferenceStatusLookup()
+  return React.useMemo<PhaseLookups>(
+    () => ({
+      statusOf: (key) => {
+        if (key.kind === 'tracker' || projectId === undefined) return undefined
+        const entry = lookup({ projectId, kind: key.kind === 'pr' ? 'PR' : 'Issue', number: key.number })
+        return { status: entry.status, pending: entry.state === 'loading' }
+      },
+    }),
+    [lookup, projectId],
+  )
+}
+
+/**
+ * `[phase] [#123] title · counts · dot` — one group's header. The fold button and the chip are
+ * SIBLINGS: the chip is a link to the forge, and a link inside a button is invalid.
+ */
+export function ReferenceGroupHeader({
+  group,
+  folded,
+  onToggle,
+  className,
+}: {
+  group: ReferenceGroup
+  folded: boolean
+  onToggle: () => void
+  className?: string
+}) {
+  const { counts, attention, key } = group
+  const countsLabel = [
+    `${counts.tasks} task${counts.tasks === 1 ? '' : 's'}`,
+    counts.needsYou ? `${counts.needsYou} need${counts.needsYou === 1 ? 's' : ''} you` : null,
+    counts.working ? `${counts.working} working` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return (
+    <div
+      data-slot="reference-group-header"
+      className={cn('flex items-center gap-1.5 px-2.5 pt-2.5 pb-1', className)}
+    >
+      {group.phase ? <PhaseBadge phase={group.phase} source={group.source} pending={group.pending} /> : null}
+      {key && key.kind !== 'tracker' ? (
+        <ReferenceChip
+          reference={{ kind: key.kind === 'pr' ? 'PR' : 'Issue', number: key.number, url: group.url }}
+          taskTitle={group.title}
+          compact
+          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+        />
+      ) : null}
+      <button
+        type="button"
+        aria-expanded={!folded}
+        onClick={onToggle}
+        title={countsLabel}
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+      >
+        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+          {/* A forge key's chip already IS the reference, so the text spends itself on the counts;
+              a tracker key and "No PR/issue" have no chip, so they lead with their title. */}
+          {key && key.kind !== 'tracker' ? countsLabel : `${group.title} · ${countsLabel}`}
+        </span>
+        <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+        <ChevronDownIcon
+          className={cn('size-3 shrink-0 text-soft-foreground transition-transform', folded && '-rotate-90')}
+          aria-hidden="true"
+        />
+      </button>
+    </div>
+  )
+}
+

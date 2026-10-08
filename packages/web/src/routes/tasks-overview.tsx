@@ -31,13 +31,14 @@ import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
-import { useListView } from '@/components/list-view'
+import { useListGrouping, useListView, type ListGrouping } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { SubtaskToggle } from '@/components/subtask-toggle'
+import { GroupingToggle, PHASE_LABEL, ReferenceGroupHeader, useGroupPhaseLookups } from '@/components/task-phase'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -54,7 +55,15 @@ import {
   type TaskColumnId,
 } from '@/lib/task-columns'
 import { listCounts, queuePositions, runTitle, sortRuns, type ListView } from '@/lib/task-groups'
-import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
+import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeNode } from '@/lib/task-tree'
+import {
+  TASK_PHASES,
+  filterGroupsByPhase,
+  groupByReference,
+  phaseFilterCounts,
+  type PhaseFilter,
+  type ReferenceGroup,
+} from '@/lib/task-phases'
 import {
   compareGroups,
   filterRuns,
@@ -98,6 +107,8 @@ export function TasksOverview({
   expandedColumns = normalizeExpandedColumns(undefined),
   onToggleColumn = () => undefined,
   columnsPending = false,
+  grouping = 'attention',
+  onGroupingChange,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
@@ -124,6 +135,11 @@ export function TasksOverview({
   onToggleColumn?: (id: TaskColumnId) => void
   /** Prevent a shallow write before the authoritative workspace state can preserve siblings. */
   columnsPending?: boolean
+  /** Attention (the flat table, sorted by status) or By PR/issue sections — shared with the
+   *  sidebar (spec 2026-10-07-task-phases-by-pr-issue). */
+  grouping?: ListGrouping
+  /** Absent = no toggle rendered. */
+  onGroupingChange?: (grouping: ListGrouping) => void
 }) {
   const [query, setQuery] = React.useState('')
   // The subtask accordion (#1110): ids of the parents whose dispatched rows are unfolded.
@@ -163,6 +179,38 @@ export function TasksOverview({
   // drop the task at the top of the active list by a click that looked like it did nothing.
   const pinToggle = view === 'archived' ? undefined : onTogglePin
 
+  // By PR/issue (Phase 3): sections instead of one flat table. The phase filter is in-memory on
+  // purpose (spec A2) — a filter that survived a reload would hide groups nobody knows are hidden.
+  const byReference = grouping === 'byReference'
+  const [phaseFilter, setPhaseFilter] = React.useState<PhaseFilter>('all')
+  const [foldedGroups, setFoldedGroups] = React.useState<ReadonlySet<string>>(new Set())
+  const toggleGroupFold = (id: string) =>
+    setFoldedGroups((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  const lookups = useGroupPhaseLookups()
+  const searchGroups = byReference ? searchReferenceGroups(groupByReference(all, view, lookups), visible) : []
+  const filterCounts = phaseFilterCounts(searchGroups)
+  const shownGroups = filterGroupsByPhase(searchGroups, phaseFilter)
+  const sections = shownGroups.map((group) => ({
+    group,
+    rows: foldedGroups.has(group.id)
+      ? []
+      : taskTreeRows(groupRunsOf(group), (id) => searching || expandedSubtasks.has(id)),
+  }))
+  const rowProps = (node: TaskTreeNode<RunRecord>) => ({
+    run: node.run,
+    depth: node.depth,
+    childCount: node.childCount,
+    subtasksExpanded: searching || expandedSubtasks.has(node.run.id),
+    onToggleSubtasks: toggleSubtasks,
+    queuePosition: node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null,
+    now,
+    onTogglePin: pinToggle,
+  })
+
   return (
     <div data-route="tasks" className="flex min-h-full flex-col">
       {/* Desktop header. Below `md` the shell's top bar already says "Tasks", and the drawer
@@ -177,6 +225,9 @@ export function TasksOverview({
             Archived
           </OverviewTab>
         </div>
+        {onGroupingChange ? (
+          <GroupingToggle grouping={grouping} onChange={onGroupingChange} className="h-[34px] items-center" />
+        ) : null}
         <div className="flex-1" />
         {/* Count-gated, like the broom beside it: offered only while there is unread history to
             clear (#unread-done-items). Archived runs are never unread, so this only ever lights
@@ -223,8 +274,116 @@ export function TasksOverview({
       </header>
 
       <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
+        {byReference && onGroupingChange ? (
+          // Below `md` the header (and its toggle) is hidden, so the cards get their own.
+          <GroupingToggle grouping={grouping} onChange={onGroupingChange} className="mb-3 self-start md:hidden" />
+        ) : null}
+        {byReference && runs !== undefined && visible.length > 0 ? (
+          <PhaseFilterChips value={phaseFilter} counts={filterCounts} onChange={setPhaseFilter} />
+        ) : null}
         {runs === undefined ? null : visible.length === 0 ? (
           <TasksEmptyState view={view} query={query} />
+        ) : byReference ? (
+          shownGroups.length === 0 ? (
+            <div
+              data-slot="phase-filter-empty"
+              className="flex flex-col items-center gap-2 py-10 text-[13px] text-muted-foreground"
+            >
+              <span>No PR/issue groups in {phaseFilterLabel(phaseFilter)}</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => setPhaseFilter('all')}>
+                Clear
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div
+                data-slot="tasks-table"
+                data-grouping="byReference"
+                className="hidden overflow-x-auto rounded-lg border border-border bg-card shadow-xs md:block"
+              >
+                <TooltipProvider>
+                  <table className="w-full border-collapse">
+                    <colgroup>
+                      {columns.map((column) => {
+                        const expanded = isColumnExpanded(column.id, expandedColumns)
+                        return (
+                          <col
+                            key={column.id}
+                            data-column-id={column.id}
+                            data-expanded={expanded}
+                            style={{ width: expanded ? column.width : '42px' }}
+                          />
+                        )
+                      })}
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        {columns.map((column) => (
+                          <TaskColumnHeader
+                            key={column.id}
+                            column={column}
+                            expanded={isColumnExpanded(column.id, expandedColumns)}
+                            onToggle={onToggleColumn}
+                            disabled={columnsPending}
+                          />
+                        ))}
+                      </tr>
+                    </thead>
+                    {sections.map(({ group, rows: groupRows }) => (
+                      <tbody
+                        key={group.id}
+                        data-slot="reference-group"
+                        data-group={group.id}
+                        data-phase={group.phase ?? 'none'}
+                      >
+                        <tr>
+                          <td colSpan={columns.length} className="border-b border-border bg-muted/40 px-2 py-0">
+                            <ReferenceGroupHeader
+                              group={group}
+                              folded={foldedGroups.has(group.id)}
+                              onToggle={() => toggleGroupFold(group.id)}
+                              className="py-1.5"
+                            />
+                          </td>
+                        </tr>
+                        {groupRows.map((node) => (
+                          <TableRow
+                            key={node.run.id}
+                            {...rowProps(node)}
+                            onRename={onRename}
+                            columns={columns}
+                            expandedColumns={expandedColumns}
+                          />
+                        ))}
+                      </tbody>
+                    ))}
+                  </table>
+                </TooltipProvider>
+              </div>
+
+              <div data-slot="task-cards" data-grouping="byReference" className="flex flex-col gap-2.5 md:hidden">
+                {sections.map(({ group, rows: groupRows }) => (
+                  <section
+                    key={group.id}
+                    data-slot="reference-group"
+                    data-group={group.id}
+                    data-phase={group.phase ?? 'none'}
+                    className="flex flex-col gap-2.5"
+                  >
+                    <ReferenceGroupHeader
+                      group={group}
+                      folded={foldedGroups.has(group.id)}
+                      onToggle={() => toggleGroupFold(group.id)}
+                      className="px-1"
+                    />
+                    {groupRows.map((node) => (
+                      <TaskCard key={node.run.id} {...rowProps(node)} showTokens={showTokens} showCost={showCost} />
+                    ))}
+                  </section>
+                ))}
+              </div>
+            </>
+          )
         ) : (
           <>
             {/* ≥md: the table. */}
@@ -336,6 +495,69 @@ export function TasksOverview({
       >
         <PlusIcon className="size-[22px]" aria-hidden="true" />
       </Link>
+    </div>
+  )
+}
+
+/**
+ * The reference groups narrowed to the search: a group keeps the rows whose run (or, for a
+ * variant tile, any member) the search kept, and a group left with none is dropped. Membership
+ * and phase were computed over every run first, so a search never changes a group's phase.
+ */
+function searchReferenceGroups(groups: readonly ReferenceGroup[], visible: readonly RunRecord[]): ReferenceGroup[] {
+  const kept = new Set(visible.map((run) => run.id))
+  return groups.flatMap((group) => {
+    const rows = group.rows.filter((row) =>
+      row.kind === 'run' ? kept.has(row.run.id) : row.members.some((member) => kept.has(member.id)),
+    )
+    return rows.length === 0 ? [] : [{ ...group, rows }]
+  })
+}
+
+/** The table shows every run (it never collapsed variants), so a group's tiles expand back. */
+function groupRunsOf(group: ReferenceGroup): RunRecord[] {
+  return group.rows.flatMap((row) => (row.kind === 'run' ? [row.run] : row.members))
+}
+
+const PHASE_FILTERS: readonly PhaseFilter[] = ['all', ...TASK_PHASES, 'none']
+
+function phaseFilterLabel(filter: PhaseFilter): string {
+  if (filter === 'all') return 'All'
+  if (filter === 'none') return 'No PR/issue'
+  return PHASE_LABEL[filter]
+}
+
+/** All · Plan · Implement · Review · Delivery · No PR/issue — each with its group count. */
+function PhaseFilterChips({
+  value,
+  counts,
+  onChange,
+}: {
+  value: PhaseFilter
+  counts: Record<PhaseFilter, number>
+  onChange: (filter: PhaseFilter) => void
+}) {
+  return (
+    <div role="group" aria-label="Filter by phase" data-slot="phase-filter" className="mb-3 flex flex-wrap gap-1.5">
+      {PHASE_FILTERS.map((filter) => {
+        const active = filter === value
+        return (
+          <button
+            key={filter}
+            type="button"
+            data-filter={filter}
+            aria-pressed={active}
+            onClick={() => onChange(filter)}
+            className={cn(
+              'inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-[12px] font-medium text-muted-foreground',
+              active && 'border-foreground/30 bg-muted text-foreground',
+            )}
+          >
+            {phaseFilterLabel(filter)}
+            <span className="font-mono text-[11px] tabular-nums">{counts[filter]}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -1127,6 +1349,7 @@ export function TasksOverviewRoute() {
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
+  const [grouping, setGrouping] = useListGrouping()
   const queryClient = useQueryClient()
   const archive = useMutation({
     mutationFn: archiveFinished,
@@ -1195,6 +1418,8 @@ export function TasksOverviewRoute() {
         expandedColumns={taskTableColumns.expandedColumns}
         onToggleColumn={taskTableColumns.toggleColumn}
         columnsPending={taskTableColumns.isPending}
+        grouping={grouping}
+        onGroupingChange={setGrouping}
       />
     </ReferenceStatusProvider>
   )
