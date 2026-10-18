@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager, StartRunInput } from '../workflows/run.ts';
 import type { WorkflowDef } from '../workflows/types.ts';
+import { createRunInputSchema, runnerSchema } from '@open-mercato/cezar-contract';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { connectedProviderAuth } from './provider-auth.testkit.ts';
@@ -65,7 +67,7 @@ describe('request validation bounds (#429)', () => {
       body: JSON.stringify(body),
     });
 
-  // ---- startRunSchema.task -------------------------------------------------
+  // ---- createRunInputSchema.task -------------------------------------------
   const stepsBody = { steps: [{ id: 'work', prompt: '{{task}}' }] };
 
   it('accepts a 100k-char task', async () => {
@@ -217,6 +219,54 @@ describe('request validation bounds (#429)', () => {
   });
 
   // ---- how the body is parsed, not just what the schema says ----------------
+  /**
+   * `POST /runs` validates the CONTRACT's `createRunInputSchema` — there is no second, local copy
+   * of the body schema in `server.ts` any more. Each body below is judged by the contract schema
+   * first, and the route must agree: a body the schema refuses is a 400, a body it accepts is not.
+   * A local schema that drifted from the contract (a bound, the XOR, a runner id) turns a row red.
+   */
+  describe('POST /runs accepts exactly what createRunInputSchema accepts', () => {
+    const image = { name: 'a.png', mediaType: 'image/png', data: 'aGk=' };
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['steps only', { ...stepsBody, task: 't' }],
+      ['task at the 100k bound', { ...stepsBody, task: 'x'.repeat(100_000) }],
+      ['task past the bound', { ...stepsBody, task: 'x'.repeat(100_001) }],
+      ['empty task', { ...stepsBody, task: '' }],
+      ['both workflow and steps', { ...stepsBody, workflow: 'quick-task', task: 't' }],
+      ['neither workflow nor steps', { task: 't' }],
+      ['nine steps', { steps: Array.from({ length: 9 }, (_, i) => ({ id: `s${i}`, prompt: '{{task}}' })), task: 't' }],
+      // variants 2–3 pass the schema but 400 in the handler outside a git repo, so ×1 stands in.
+      ['variants 1', { ...stepsBody, task: 't', variants: 1 }],
+      ['variants 4', { ...stepsBody, task: 't', variants: 4 }],
+      ['unknown runner', { ...stepsBody, task: 't', runner: 'nope' }],
+      ['known runner', { ...stepsBody, task: 't', runner: 'codex' }],
+      ['system prompt past 20k', { ...stepsBody, task: 't', systemPrompt: 'x'.repeat(20_001) }],
+      ['four images', { ...stepsBody, task: 't', images: [image, image, image, image] }],
+      ['five images', { ...stepsBody, task: 't', images: [image, image, image, image, image] }],
+      ['agent profile past 64', { ...stepsBody, task: 't', agentProfile: 'p'.repeat(65) }],
+      ['todo id past 200', { ...stepsBody, task: 't', todoId: 't'.repeat(201) }],
+    ];
+
+    it.each(cases)('%s', async (_name, body) => {
+      const accepted = createRunInputSchema.safeParse(body).success;
+      const res = await postJson('/api/v1/runs', body);
+      if (accepted) expect(res.status).not.toBe(400);
+      else expect(res.status).toBe(400);
+    });
+
+    it('covers both verdicts, so the table cannot pass vacuously', () => {
+      const verdicts = new Set(cases.map(([, body]) => createRunInputSchema.safeParse(body).success));
+      expect(verdicts).toEqual(new Set([true, false]));
+    });
+
+    // The route used to enumerate runners from the service's own `RUNNER_IDS`; it now trusts the
+    // contract's `runnerSchema`, a second hand-written list. A runner added to one and not the
+    // other would be refused by `POST /runs` (or accepted with no runner behind it) — pin them equal.
+    it("the contract's runner ids are the service's RUNNER_IDS", () => {
+      expect([...runnerSchema.options].sort()).toEqual([...RUNNER_IDS].sort());
+    });
+  });
+
   /**
    * These routes moved from parsing inline (`await c.req.json().catch(() => …)`) to Hono's
    * `validator('json')`, so that `hc` can typecheck request bodies. Hono's validator is stricter
