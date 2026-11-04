@@ -150,7 +150,19 @@ test('the release tarball serves `cez mcp` against a dry-run cockpit', { timeout
 
     assert.deepEqual(client.stray, [], 'stdout carries JSON-RPC only');
   } finally {
-    for (const child of children) child.kill('SIGTERM');
-    await rm(root, { recursive: true, force: true });
+    // Wait for each child to exit: the cockpit still flushes `.ai/cezar/` on its way down, and
+    // removing the tree under it fails with ENOTEMPTY.
+    await Promise.all(
+      children.map(
+        (child) =>
+          new Promise<void>((resolveExit) => {
+            if (child.exitCode !== null || child.signalCode !== null) return resolveExit();
+            const timer = setTimeout(() => (child.kill('SIGKILL'), resolveExit()), 15_000);
+            child.once('exit', () => (clearTimeout(timer), resolveExit()));
+            child.kill('SIGTERM');
+          }),
+      ),
+    );
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });
