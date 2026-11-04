@@ -36,6 +36,7 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
   const savedFollowups = process.env.CEZ_FOLLOWUPS;
   const savedSingleProject = process.env.CEZ_SINGLE_PROJECT;
   const savedAutomations = process.env.CEZ_AUTOMATIONS;
+  const savedDispatch = process.env.CEZ_DISPATCH;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   let home: string;
   let repoRoot: string;
@@ -58,6 +59,10 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     // route. Left off, the whole `/automations*` family would answer an identical 409 under all
     // three spellings — parity would pass while testing nothing about those routes.
     process.env.CEZ_AUTOMATIONS = '1';
+    // Dispatch is opt-in on the same terms (spec 2026-09-10-dispatch) and for the same
+    // reason: left off, both `/runs/:id/{dispatch,report}` routes would answer an identical 409
+    // under all three spellings, and parity would pass while testing nothing about them.
+    process.env.CEZ_DISPATCH = '1';
     // Deterministic on any machine: no network, no real agent CLIs.
     process.env.CEZ_DRY_RUN = '1';
     // `skillsRepos: []` disables team skills — no background clone can warm a
@@ -101,6 +106,8 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     else process.env.CEZ_SINGLE_PROJECT = savedSingleProject;
     if (savedAutomations === undefined) delete process.env.CEZ_AUTOMATIONS;
     else process.env.CEZ_AUTOMATIONS = savedAutomations;
+    if (savedDispatch === undefined) delete process.env.CEZ_DISPATCH;
+    else process.env.CEZ_DISPATCH = savedDispatch;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });
@@ -177,6 +184,9 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
       'PATCH /runs/:id',
       'POST /todos/:id/start',
       'GET /repo/commit/:sha',
+      'POST /impact',
+      'GET /artifacts',
+      'GET /assets',
     ]) {
       expect(keys, expected).toContain(expected);
     }
@@ -189,6 +199,7 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
       'POST /projects',
       'GET /fs/browse',
       'GET /workspace/runs-index',
+      'GET /workspace/host-usage',
       'GET /workspace/agent-profiles',
       'POST /workspace/agent-profiles',
       'PATCH /workspace/agent-profiles/:id',
@@ -197,12 +208,16 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
       'GET /workspace/agent-profiles/:id/details',
       'GET /workspace/agent-profiles/:id/status',
       'POST /workspace/agent-profiles/:id/open',
+      'GET /workspace/secrets',
+      'PUT /workspace/secrets/:name',
+      'DELETE /workspace/secrets/:name',
     ]) {
       expect(keys, workspaceOnly).not.toContain(workspaceOnly);
     }
   });
 
-  it('answers every GET route byte-identically across the three spellings', async () => {
+  // Three requests per GET route, run back to back: ~1 s alone, past 5 s under the full suite.
+  it('answers every GET route byte-identically across the three spellings', { timeout: 30_000 }, async () => {
     const manifest = projectRouteManifest(app);
     const gets = manifest.filter((r: ProjectRouteInfo) => r.method === 'GET' && !r.path.endsWith('/events'));
     expect(gets.length).toBeGreaterThanOrEqual(20);
@@ -227,6 +242,8 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     await expectParity('/workflows/parse', json('POST', { yaml: '' }));
     // 404: unknown ids.
     await expectParity('/runs/no-such-run/archive', json('POST', {}));
+    await expectParity('/runs/no-such-run/pin', json('POST', {}));
+    await expectParity('/runs/no-such-run/promote', json('POST', {}));
     await expectParity('/runs/no-such-run', json('PATCH', { title: 't' }));
     await expectParity('/workflows/no-such-workflow', () => ({
       method: 'DELETE',
@@ -236,6 +253,12 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     await expectParity('/todos/t1/start', json('POST', {}));
     // 200 non-GET without observable side effects (no worktrees exist).
     await expectParity('/worktrees/reclaim', json('POST', {}));
+    // Assess Impact (spec 2026-10-22): 400 on a bad body, 409 on a subject it refuses.
+    await expectParity('/impact', json('POST', { subject: { kind: 'pr', number: -1 } }));
+    await expectParity('/impact', json('POST', { subject: { kind: 'spec', path: 'README.md' } }));
+    await expectParity('/artifacts?subject=pr:42');
+    await expectParity('/artifacts?subject=spec:.ai/specs/x.md');
+    await expectParity('/assets');
   });
 
   /** Read one SSE response until its first ping, then hang up. */

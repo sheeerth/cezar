@@ -43,13 +43,15 @@ export type UsageTotals = z.infer<typeof usageTotalsSchema>;
 export const usageWindowIdSchema = z.enum(['rolling5h', 'today', 'last7d', 'last30d']);
 export type UsageWindowId = z.infer<typeof usageWindowIdSchema>;
 
-export const usageWindowSchema = z.object({
+/** One span's totals. Named a span, not a window, because `usage-windows.ts` already exports
+ *  `UsageWindow` (a vendor quota window) from this package. The wire shape is unchanged. */
+export const usageSpanSchema = z.object({
   id: usageWindowIdSchema,
   /** Inclusive lower bound, ISO-8601 — what the number is a sum over. */
   startedAt: z.string(),
   totals: usageTotalsSchema,
 });
-export type UsageWindow = z.infer<typeof usageWindowSchema>;
+export type UsageSpan = z.infer<typeof usageSpanSchema>;
 
 /**
  * A quota figure the PROVIDER itself reported — never one cezar computed.
@@ -100,7 +102,7 @@ export const usageAccountSchema = z.object({
   isDefault: z.boolean(),
   available: z.boolean(),
   reason: z.string().optional(),
-  windows: z.array(usageWindowSchema),
+  windows: z.array(usageSpanSchema),
   limits: z.array(usageLimitSchema),
   /** Newest-first by token count, over `last30d`. */
   models: z.array(usageModelSchema),
@@ -121,7 +123,7 @@ export type UsageGroup = z.infer<typeof usageGroupSchema>;
 
 /** What cezar's own run records say, across every registered project. */
 export const usageRunsSchema = z.object({
-  windows: z.array(usageWindowSchema),
+  windows: z.array(usageSpanSchema),
   byProvider: z.array(usageGroupSchema),
   byProject: z.array(usageGroupSchema),
   daily: z.array(usageDaySchema),

@@ -2,7 +2,7 @@ import type {
   UsageDay,
   UsageModel,
   UsageTotals,
-  UsageWindow,
+  UsageSpan,
   UsageWindowId,
 } from '@open-mercato/cezar-contract';
 
@@ -115,7 +115,7 @@ export function localDateKey(at: number): string {
 }
 
 export interface UsageSummary {
-  windows: UsageWindow[];
+  windows: UsageSpan[];
   daily: UsageDay[];
   models: UsageModel[];
 }
