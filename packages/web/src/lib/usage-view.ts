@@ -65,7 +65,7 @@ export function accountsWindowTotals(
  * The limit closest to biting, across every account — what the chip shows and what a user
  * actually wants to know ("am I about to be cut off?").
  *
- * Undefined when no vendor published one, which is the normal state of a Claude-only machine.
+ * Undefined when no vendor published one, e.g. a Claude-only machine whose account cezar has not run yet.
  */
 export function tightestLimit(
   accounts: readonly UsageAccount[],

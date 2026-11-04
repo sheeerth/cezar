@@ -1,8 +1,9 @@
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { UsageLimit } from '@open-mercato/cezar-contract';
+import type { UsageLimit, UsageWindow } from '@open-mercato/cezar-contract';
 
+import { futureUsageWindows, loadUsageWindows } from '../workspace/usage-windows.ts';
 import { readJsonlTail, scanJsonlTree } from './jsonl-scan.ts';
 import { retentionStartMs, type UsageSample } from './samples.ts';
 
@@ -58,9 +59,49 @@ export async function readClaudeUsage(home: string, now: number): Promise<Provid
   const cutoffMs = retentionStartMs(now);
   const scan = await scanJsonlTree(projects, { cutoffMs, parse: parseClaudeLine });
   warnOnDroppedFiles('claude', scan.droppedFiles);
-  // Claude publishes no quota figure to disk — `/usage` in the CLI asks the API. An empty
-  // `limits` is therefore the honest answer, not a gap waiting to be filled with a guess.
+  // Claude publishes no quota figure to its home — `/usage` in the CLI asks the API. The figures
+  // it DOES publish arrive on a running session's stream, which is where cezar's own record of
+  // them comes from: see `readObservedClaudeLimits`.
   return { available: true, samples: scan.samples, limits: [] };
+}
+
+/**
+ * Claude quota windows cezar's own Claude runs observed for this account — the usage-limit hold's
+ * store (`workspace/usage-windows.ts`, #1775), keyed the way the run engine writes it. Only windows
+ * that have not reset yet and carry a percentage.
+ */
+export async function readObservedClaudeLimits(
+  accountId: string,
+  home: string,
+  now: number,
+): Promise<UsageLimit[]> {
+  const profilePath = await realpath(home).catch(() => home);
+  const snapshot = loadUsageWindows({ provider: 'claude', accountId, profilePath });
+  if (!snapshot) return [];
+  return futureUsageWindows(snapshot, now).flatMap((window) => {
+    const limit = toObservedLimit(window);
+    return limit ? [limit] : [];
+  });
+}
+
+function toObservedLimit(window: UsageWindow): UsageLimit | null {
+  if (window.usedPercent === null) return null;
+  const limit: UsageLimit = {
+    id: window.id,
+    label:
+      window.durationMinutes !== null
+        ? windowLabel(window.durationMinutes)
+        : window.kind === 'five-hour'
+          ? '5h window'
+          : window.kind === 'weekly'
+            ? 'Weekly window'
+            : window.id,
+    usedPercent: window.usedPercent,
+    observedAt: new Date(window.observedAt).toISOString(),
+  };
+  if (window.durationMinutes !== null) limit.windowMinutes = window.durationMinutes;
+  if (window.resetsAt !== null) limit.resetsAt = new Date(window.resetsAt).toISOString();
+  return limit;
 }
 
 async function isDirectory(path: string): Promise<boolean> {

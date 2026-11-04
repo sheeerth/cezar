@@ -56,12 +56,14 @@ export type UsageSpan = z.infer<typeof usageSpanSchema>;
 /**
  * A quota figure the PROVIDER itself reported — never one cezar computed.
  *
- * Only Codex publishes this locally (its rollout log carries `rate_limits` verbatim), so the array
- * is empty for Claude rather than filled with a guess: cezar does not know a plan's token ceiling
- * and inventing one would be a number the user could act on and be wrong about.
+ * Two sources, both the vendor's own figure: Codex's rollout log (`rate_limits`, verbatim), and for
+ * Claude the `rate_limit_event` windows cezar's own Claude runs observed on the stream (the store
+ * behind the usage-limit hold, `usage-windows.ts`). A Claude account cezar has never run therefore
+ * has an empty array rather than a guess: cezar does not know a plan's token ceiling, and inventing
+ * one would be a number the user could act on and be wrong about.
  */
 export const usageLimitSchema = z.object({
-  /** Vendor's own window key — `primary`, `secondary`. */
+  /** Vendor's own window key — `primary`, `secondary`, `five_hour`, `seven_day`. */
   id: z.string(),
   label: z.string(),
   usedPercent: z.number(),

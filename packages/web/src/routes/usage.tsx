@@ -31,7 +31,7 @@ import { cn } from '@/lib/utils'
  *
  *  - **Agent accounts** — what each agent CLI recorded in its own home, terminal sessions
  *    included. This is the "how much of my plan is gone" number, and the only one that can carry a
- *    vendor's own quota percentage (Codex publishes one; Claude does not).
+ *    vendor's own quota percentage (Codex's rollout log; for Claude, what cezar's runs observed).
  *  - **cezar tasks** — what this cockpit's runs spent, the only half that can be attributed to a
  *    project or priced in dollars.
  *

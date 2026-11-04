@@ -1,11 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { UsageWindow } from '@open-mercato/cezar-contract';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { clearJsonlScanCache } from './jsonl-scan.ts';
-import { readClaudeUsage, readCodexUsage } from './providers.ts';
+import { readClaudeUsage, readCodexUsage, readObservedClaudeLimits } from './providers.ts';
 import { summarizeSamples } from './samples.ts';
+import { buildUsageSnapshot } from './snapshot.ts';
 
 const NOW = Date.now();
 const iso = (offsetMs = 0) => new Date(NOW + offsetMs).toISOString();
@@ -258,5 +262,61 @@ describe('readCodexUsage', () => {
   it('has no limits when no session recorded any', async () => {
     writeRollout('rollout-1.jsonl', [tokenCount(iso(-60_000), { input_tokens: 1, output_tokens: 1 })]);
     expect((await readCodexUsage(home, NOW)).limits).toEqual([]);
+  });
+});
+
+describe('readObservedClaudeLimits', () => {
+  // The run engine's own write path, so the binding this reads is the one it actually writes.
+  const observe = async (accountId: string, windows: UsageWindow[]) =>
+    saveUsageWindows(
+      { provider: 'claude', accountId, profilePath: realpathSync(home) },
+      { provider: 'claude', source: 'claude-stream', observedAt: NOW - 60_000, windows },
+    );
+  const window = (overrides: Partial<UsageWindow>): UsageWindow => ({
+    id: 'five_hour',
+    kind: 'five-hour',
+    applicability: 'all',
+    models: [],
+    resetsAt: NOW + 3_600_000,
+    durationMinutes: 300,
+    usedPercent: 42,
+    status: 'allowed',
+    observedAt: NOW - 60_000,
+    ...overrides,
+  });
+
+  it('surfaces the quota windows cezar runs observed for THIS account, verbatim', async () => {
+    const accountId = `observed-${randomUUID()}`;
+    const weekly = window({ id: 'seven_day', kind: 'weekly', durationMinutes: 10080, usedPercent: 7 });
+    expect(await observe(accountId, [window({}), weekly])).toBe(true);
+    // Read through the unresolved path: the store is keyed on the realpath, as the engine writes it.
+    const limits = await readObservedClaudeLimits(accountId, home, NOW);
+    expect(limits.map((l) => [l.id, l.label, l.usedPercent, l.windowMinutes])).toEqual([
+      ['five_hour', '5h window', 42, 300],
+      ['seven_day', 'Weekly window', 7, 10080],
+    ]);
+    expect(limits[0]!.resetsAt).toBe(new Date(NOW + 3_600_000).toISOString());
+  });
+
+  it("reaches the Claude account's row in the snapshot", async () => {
+    const accountId = `observed-${randomUUID()}`;
+    await observe(accountId, [window({})]);
+    writeTranscript('session.jsonl', [claudeReply({ id: 'msg_1', requestId: 'req_1' })]);
+    const snapshot = await buildUsageSnapshot({
+      accounts: [{ id: accountId, provider: 'claude', label: 'Work', configDir: home, path: home, isDefault: false }],
+      projects: [],
+      now: NOW,
+    });
+    expect(snapshot.accounts[0]!.limits.map((l) => [l.id, l.usedPercent])).toEqual([['five_hour', 42]]);
+  });
+
+  it("drops windows that already reset or carry no percentage, and other accounts' figures", async () => {
+    const accountId = `observed-${randomUUID()}`;
+    await observe(accountId, [
+      window({ id: 'five_hour', resetsAt: NOW - 1 }),
+      window({ id: 'seven_day', kind: 'weekly', durationMinutes: 10080, usedPercent: null }),
+    ]);
+    expect(await readObservedClaudeLimits(accountId, home, NOW)).toEqual([]);
+    expect(await readObservedClaudeLimits(`never-ran-${randomUUID()}`, home, NOW)).toEqual([]);
   });
 });

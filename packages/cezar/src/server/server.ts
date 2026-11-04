@@ -8252,6 +8252,28 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     });
 
+  /**
+   * Every project a workspace-wide read covers, with the store it may read WITHOUT building a
+   * context (`contexts.context()` prunes worktrees and recovers agents). Shared by the dashboard
+   * and the usage monitor. The boot project is added when the registry omits it — registration is
+   * suppressed for task worktrees and `$HOME` (`shouldRegisterProject`) — and is never registered.
+   */
+  const bootRunSource = (id: string) => ({
+    id, name: basename(bootRoot), root: bootRoot, missing: false, store: bootContext.store,
+  });
+  const workspaceRunSources = async () => {
+    const selector = capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined;
+    const projects = await listProjects(selector);
+    const bootId = await resolveBootProject(projects);
+    const sources = projects.map((project) => {
+      const missing = project.status === 'missing';
+      const owned = missing ? undefined : project.id === bootId ? bootContext : contexts.peek(project.id);
+      return { id: project.id, name: project.name, root: project.root, missing, ...(owned ? { store: owned.store } : {}) };
+    });
+    if (!sources.some((source) => source.id === bootId)) sources.unshift(bootRunSource(bootId));
+    return sources;
+  };
+
   // ---- chained family: token usage (workspace-level) -----------------------
   /**
    * `GET /workspace/usage` — how many tokens the machine's agent accounts have burned, and how
@@ -8271,43 +8293,20 @@ export function createApp(deps: ServerDeps) {
     projects: RunsUsageProject[];
     unreadable: string[];
   }> => {
-    let entries: ProjectListEntry[] = [];
-    try {
-      const selector = capabilities().singleProject
-        ? { projectId: await resolveBootProject() }
-        : undefined;
-      entries = await listProjects(selector);
-    } catch {
-      // An unreadable workspace still has the boot project's own store in hand, so this degrades
-      // to that rather than to nothing — never a 500.
-      entries = [];
-    }
-    const bootId = await resolveBootProject(entries);
+    // An unreadable registry still leaves the boot project's own store in hand — degrade to that,
+    // never a 500.
+    const sources = await workspaceRunSources().catch(async () => [bootRunSource(await resolveBootProject([]))]);
     const projects: RunsUsageProject[] = [];
     const unreadable: string[] = [];
-    for (const project of entries) {
-      if (project.status === 'missing') {
-        unreadable.push(project.id);
+    for (const source of sources) {
+      if (source.missing) {
+        unreadable.push(source.id);
         continue;
       }
-      const owned = project.id === bootId ? bootContext : contexts.peek(project.id);
-      const runs = owned
-        ? owned.store.listRuns()
-        : readRunIndexFromDisk(join(project.root, '.ai/cezar'));
-      projects.push({ projectId: project.id, label: project.name, runs });
-    }
-    // The boot project is NOT always in the registry: registration is deliberately suppressed for
-    // task worktrees and for `$HOME` itself (`shouldRegisterProject`), and an unreadable registry
-    // drops everything. Its store is right here either way, and unlike the ⌘K index — which
-    // degrades onto the active project's own `GET /runs` — this route is the only source its
-    // reader has. Without this, a cezar serving a task worktree would report "0 tokens spent"
-    // while the runs that spent them sit in the store it is holding.
-    if (!projects.some((project) => project.projectId === bootId)) {
-      projects.unshift({
-        projectId: bootId,
-        label: basename(bootRoot),
-        runs: bootContext.store.listRuns(),
-      });
+      const runs = source.store
+        ? source.store.listRuns()
+        : readRunIndexFromDisk(join(source.root, '.ai/cezar'));
+      projects.push({ projectId: source.id, label: source.name, runs });
     }
     return { projects, unreadable };
   };
@@ -8385,23 +8384,9 @@ export function createApp(deps: ServerDeps) {
   });
 
   const dashboard = new DashboardReader({
-    projects: async () => {
-      const selector = capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined;
-      const projects = await listProjects(selector);
-      const bootId = await resolveBootProject(projects);
-      const summaries = projects.map((project) => {
-        const owned = project.status === 'missing' ? undefined
-          : project.id === bootId ? bootContext : contexts.peek(project.id);
-        return { id: project.id, root: project.root, ...(owned ? { store: owned.store } : {}) };
-      });
-      // Dashboard observability includes the folder this server actually serves even
-      // when the sidebar omits this unregistered launch folder (including task worktrees).
-      // Its existing context is authoritative; a dashboard read never registers it.
-      if (!summaries.some(project => project.id === bootId)) {
-        summaries.unshift({ id: bootId, root: bootRoot, store: bootContext.store });
-      }
-      return summaries;
-    },
+    // Includes the unregistered boot folder (task worktrees too); a dashboard read never registers it.
+    projects: async () =>
+      (await workspaceRunSources()).map(({ id, root, store }) => ({ id, root, ...(store ? { store } : {}) })),
     telemetryProjects: async () => {
       // Registry-only: no per-project probing, disk summaries, recovery, or new sampler.
       const registry = (await loadWorkspaceConfig()).projects;

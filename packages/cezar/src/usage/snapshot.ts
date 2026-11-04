@@ -1,7 +1,12 @@
 import type { UsageAccount, UsageSnapshot } from '@open-mercato/cezar-contract';
 
 import type { ResolvedAgentProfile } from '../workspace/agent-profiles.ts';
-import { readClaudeUsage, readCodexUsage, type ProviderUsageRead } from './providers.ts';
+import {
+  readClaudeUsage,
+  readCodexUsage,
+  readObservedClaudeLimits,
+  type ProviderUsageRead,
+} from './providers.ts';
 import { collectRunsUsage, type RunsUsageProject } from './runs-usage.ts';
 import { summarizeSamples, USAGE_WINDOW_IDS, windowStartMs } from './samples.ts';
 
@@ -47,6 +52,11 @@ async function readAccount(account: ResolvedAgentProfile, now: number): Promise<
       account.provider === 'codex'
         ? await readCodexUsage(account.path, now)
         : await readClaudeUsage(account.path, now);
+    if (account.provider === 'claude') {
+      // Claude writes no quota to its home; the windows its stream reported to cezar's own runs
+      // are the only vendor figure there is (`readObservedClaudeLimits`).
+      read = { ...read, limits: await readObservedClaudeLimits(account.id, account.path, now) };
+    }
   } catch {
     read = {
       available: false,
