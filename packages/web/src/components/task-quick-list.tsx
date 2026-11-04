@@ -300,7 +300,7 @@ export function QuickListReferenceGroups({
               <Link
                 to={scopeTo(scope, '/')}
                 data-slot="reference-group-more"
-                className="flex h-7 items-center rounded-md px-3 text-[11.5px] text-muted-foreground hover:text-foreground"
+                className="flex h-7 items-center rounded-md px-3 text-meta text-muted-foreground hover:text-foreground"
               >
                 +{hidden} more
               </Link>
