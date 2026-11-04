@@ -403,7 +403,7 @@ const API_SEGMENTS = new Set([
   'parse', 'pause', 'pick', 'pin', 'plan', 'pr', 'providers', 'push', 'queued-messages', 'read',
   'read-all', 'reclaim', 'refresh', 'remove-worktree', 'repo', 'report', 'retry', 'run', 'runs',
   'runs-index', 'search', 'self-update', 'setup', 'skills-update', 'star-count', 'status',
-  'telemetry', 'todos', 'tree', 'ui-state', 'unread', 'validate', 'watch', 'workspace', 'ws',
+  'telemetry', 'todos', 'tree', 'ui-state', 'unread', 'usage', 'validate', 'watch', 'workspace', 'ws',
 ])
 
 /** An API pathname as its route's shape: `/api/v1/p/:param/runs/:param/messages`. */

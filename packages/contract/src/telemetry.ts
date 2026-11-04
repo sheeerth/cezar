@@ -35,7 +35,7 @@ export type SetTelemetryConsentInput = z.infer<typeof setTelemetryConsentInputSc
 export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
   'p', 'new', 'tasks', 'changes', 'files', 'commits', 'compare', 'git', 'branches', 'log',
   'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
-  'assets',
+  'assets', 'usage',
   'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
   'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
   'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy',

@@ -21,6 +21,7 @@ describe('routeShape', () => {
     expect(routeShape('/p/acme-shop/github/prs/412')).toBe('/p/:param/github/prs/:param')
     expect(routeShape('/p/acme-shop/workflows/client-secret-flow')).toBe('/p/:param/workflows/:param')
     expect(routeShape('/settings/global/appearance')).toBe('/settings/global/appearance')
+    expect(routeShape('/p/acme-shop/usage')).toBe('/p/:param/usage')
     expect(routeShape('/')).toBe('/')
   })
 })
