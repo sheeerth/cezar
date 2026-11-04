@@ -9,7 +9,13 @@
  */
 import { z } from 'zod';
 import type { ToolAnnotations } from '@modelcontextprotocol/server';
-import { changesPayloadSchema, createRunInputBaseSchema, runStatusSchema, type RunRecord } from '@open-mercato/cezar-contract';
+import {
+  changesPayloadSchema,
+  createRunInputBaseSchema,
+  createRunInputSchema,
+  runStatusSchema,
+  type RunRecord,
+} from '@open-mercato/cezar-contract';
 import { Cockpit, CockpitError } from './cockpit.ts';
 import { matchProject, projectScope } from './projects.ts';
 import { isSettled, waitForRuns, type WaitTarget } from './wait.ts';
@@ -381,22 +387,39 @@ export const WAIT_TOOL: ToolDef = tool({
 
 /** start_run's body: the contract's own fields, picked — so what the tool advertises is what
  *  `POST /runs` validates. `workflow` is optional HERE because the route needs exactly one of
- *  workflow/steps and this tool never sends steps: it fills in `quick-task`. */
+ *  workflow/steps and this tool never sends steps: it fills in `quick-task`. `reasoningEffort`
+ *  (#1888) rides with `model`: same per-task backend choice, same `agentModelsLocked` gate. */
 const startRunInput = createRunInputBaseSchema
-  .pick({ task: true, workflow: true, runner: true, model: true, agentProfile: true })
+  .pick({ task: true, workflow: true, runner: true, model: true, reasoningEffort: true, agentProfile: true })
   .extend({ projectId });
+
+/** The body `start_run` sends, checked with `createRunInputSchema` — the route's own validator
+ *  since #1888 — so the refinements a `.pick()` drops (a non-empty task) answer without a round
+ *  trip, in the route's own `400: field: message` words. */
+export function startRunBody(args: Omit<z.infer<typeof startRunInput>, 'projectId'>) {
+  const body = { ...args, workflow: args.workflow ?? 'quick-task' };
+  const parsed = createRunInputSchema.safeParse(body);
+  if (!parsed.success) {
+    const detail = parsed.error.issues
+      .map((issue) => (issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
+      .join('; ');
+    throw new CockpitError(`400: ${detail}`);
+  }
+  return body;
+}
 
 export const WRITE_TOOLS: ToolDef[] = [
   tool({
     name: 'start_run',
     title: 'Start a task',
     description:
-      'Start a cezar task: an agent works on `task` in its own git worktree and branch and stops at the review gate (it never merges). Returns the task id immediately — follow it with wait_for_runs. workflow defaults to quick-task (see list_workflows); runner/model pick the agent backend.',
+      'Start a cezar task: an agent works on `task` in its own git worktree and branch and stops at the review gate (it never merges). Returns the task id immediately — follow it with wait_for_runs. workflow defaults to quick-task (see list_workflows); runner/model/reasoningEffort pick the agent backend.',
     kind: 'write',
     input: startRunInput,
-    async handler({ projectId: explicit, workflow, ...rest }, ctx) {
+    async handler({ projectId: explicit, ...rest }, ctx) {
+      const body = startRunBody(rest);
       const project = await resolveProject(ctx, explicit);
-      const run = await ctx.cockpit.post<RunRecord>(`${projectScope(project)}/runs`, { ...rest, workflow: workflow ?? 'quick-task' }, ctx.signal);
+      const run = await ctx.cockpit.post<RunRecord>(`${projectScope(project)}/runs`, body, ctx.signal);
       return { projectId: project, id: run.id, title: run.title, status: run.status, ...(run.branch ? { branch: run.branch } : {}) };
     },
   }),

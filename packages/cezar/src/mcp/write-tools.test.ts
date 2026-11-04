@@ -80,6 +80,28 @@ describe('cez mcp — write tools against the real routes', () => {
     expect(refused.content[0]!.text).toMatch(/^4\d\d: /);
   });
 
+  it('start_run passes reasoningEffort through (#1888)', async () => {
+    client = await connect();
+    const result = await client.callTool('start_run', { task: 't', projectId: 'default', runner: 'codex', reasoningEffort: 'high' });
+    expect(result.isError, result.content[0]!.text).toBeUndefined();
+    expect(started[0]).toMatchObject({ reasoningEffort: 'high' });
+  });
+
+  it('start_run validates exactly like POST /runs: an empty task is refused with the route\'s own words', async () => {
+    client = await connect();
+    const local = await client.callTool('start_run', { task: '   ', projectId: 'default' });
+    expect(local.isError).toBe(true);
+    expect(started).toHaveLength(0);
+    // The same body sent straight to the route: same status, same message.
+    const direct = await apiRequest(app, '/api/v1/p/default/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ task: '   ', workflow: 'quick-task' }),
+    });
+    expect(direct.status).toBe(400);
+    expect(local.content[0]!.text).toBe(`400: ${((await direct.json()) as { error: string }).error}`);
+  });
+
   it('send_run_message, continue_run, cancel_run and finish_run reach their routes', async () => {
     const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
     store.updateRun(run.id, { status: 'running' });

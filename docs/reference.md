@@ -767,7 +767,15 @@ route, no state, nothing to configure.
   server was registered: agents in tasks delegate with `cez task`, whose engine
   enforces the children-in-flight cap and the carved budget. Claude Code forwards
   its environment to stdio MCP servers (checked with 2.1.280), so a user-level
-  registration is safe.
+  registration is safe. Do not list `cez mcp` in `.ai/cezar/mcp.local.json`
+  ([private MCP servers](../.ai/specs/2026-10-07-private-project-mcp.md)): that
+  file is for MCP servers handed TO task agents, and agents there delegate with
+  `cez task` anyway.
+- **Why it may discover, when `cez task`/`cez runs` never guess `CEZ_API_URL`:**
+  `cez task` runs inside tasks, where a missing address is how the cockpit says
+  dispatch is off, and `cez runs` shares its addressing. `cez mcp` serves its write tools only outside a task, to
+  the person at the keyboard, so finding their cockpit is the zero-config
+  answer; inside a task it is read-only whatever it found.
 - **Results** are capped at 50,000 characters; a route's refusal comes back as a
   tool error with the route's own message.
 
@@ -780,7 +788,7 @@ route, no state, nothing to configure.
 | `get_run_messages` | read | The newest conversation items: assistant text, user messages, tool-call summaries, questions, errors. |
 | `get_diff` | read | The task's changes (the Changes tab's base); `path` for one file, `patches: false` for a stat. |
 | `wait_for_runs` | read | Returns when any/all listed tasks settle — waiting, monitoring, review or ended — or after `timeoutS` (≤ 45 s); call again to keep waiting. |
-| `start_run` | write | Start a task (`workflow` defaults to `quick-task`); returns its id at once. |
+| `start_run` | write | Start a task (`workflow` defaults to `quick-task`; optional `runner`, `model`, `reasoningEffort`, `agentProfile`); validated like `POST /runs`; returns its id at once. |
 | `send_run_message` | write | Message a task's agent. |
 | `continue_run` | write | Reopen a stopped task for another turn. |
 | `cancel_run` | destructive | Stop a task now. |
