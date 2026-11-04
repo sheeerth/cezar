@@ -270,11 +270,12 @@ describe('filters, counts, cap and requests', () => {
   )
 
   it('filters whole groups by phase, "none" being the No PR/issue group', () => {
-    expect(filterGroupsByPhase(groups, 'review').map((g) => g.id)).toEqual(['pr#1'])
-    expect(filterGroupsByPhase(groups, 'plan').map((g) => g.id)).toEqual(['pr#2'])
-    expect(filterGroupsByPhase(groups, 'none').map((g) => g.id)).toEqual(['none'])
-    expect(filterGroupsByPhase(groups, 'all')).toHaveLength(4)
-    expect(phaseFilterCounts(groups)).toEqual({ all: 4, plan: 1, implement: 1, review: 1, delivery: 0, none: 1 })
+    expect(filterGroupsByPhase(groups, ['review']).map((g) => g.id)).toEqual(['pr#1'])
+    expect(filterGroupsByPhase(groups, ['plan']).map((g) => g.id)).toEqual(['pr#2'])
+    expect(filterGroupsByPhase(groups, ['none']).map((g) => g.id)).toEqual(['none'])
+    expect(filterGroupsByPhase(groups, ['review', 'none']).map((g) => g.id)).toEqual(['pr#1', 'none'])
+    expect(filterGroupsByPhase(groups, [])).toHaveLength(4)
+    expect(phaseFilterCounts(groups)).toEqual({ plan: 1, implement: 1, review: 1, delivery: 0, none: 1 })
   })
 
   it('caps rows across groups and reports what each group lost', () => {

@@ -66,7 +66,7 @@ export function GroupingToggle({
             onClick={() => onChange(option.value)}
             onKeyDown={(event) => onKeyDown(event, index)}
             className={cn(
-              'flex h-6 flex-1 items-center justify-center rounded-[6px] px-2 text-[11.5px] font-medium whitespace-nowrap text-muted-foreground',
+              'flex h-6 flex-1 items-center justify-center rounded-[6px] px-2 text-meta font-medium whitespace-nowrap text-muted-foreground',
               active && 'bg-card font-semibold text-foreground shadow-xs',
             )}
           >
@@ -116,7 +116,7 @@ export function PhaseBadge({
       data-pending={pending ? '' : undefined}
       title={pending ? `${source} · waiting for the forge` : source}
       className={cn(
-        'inline-flex shrink-0 items-center rounded-full px-1.5 py-px text-[10px] font-semibold tracking-[0.02em] uppercase',
+        'inline-flex shrink-0 items-center rounded-full px-1.5 py-px text-micro font-semibold tracking-[0.02em] uppercase',
         PHASE_TONE[phase],
         pending && 'opacity-60',
         className,
@@ -213,7 +213,7 @@ export function ReferenceGroupHeader({
           reference={{ kind: key.kind === 'pr' ? 'PR' : 'Issue', number: key.number, url: group.url }}
           taskTitle={group.title}
           compact
-          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-micro"
         />
       ) : null}
       {/* A Jira/Linear key has no forge status to colour a chip with — a plain link to the item. */}
@@ -224,7 +224,7 @@ export function ReferenceGroupHeader({
           rel="noreferrer"
           data-slot="tracker-chip"
           title={group.url}
-          className="inline-flex shrink-0 items-center rounded-full border border-border px-1.5 py-px font-mono text-[10.5px] font-semibold text-muted-foreground hover:bg-muted"
+          className="inline-flex shrink-0 items-center rounded-full border border-border px-1.5 py-px font-mono text-micro font-semibold text-muted-foreground hover:bg-muted"
         >
           {key.key}
         </a>
@@ -236,7 +236,7 @@ export function ReferenceGroupHeader({
         title={countsLabel}
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
       >
-        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+        <span className="min-w-0 flex-1 truncate text-meta font-semibold tracking-[0.04em] text-soft-foreground uppercase">
           {/* A forge key's chip already IS the reference, so the text spends itself on the counts;
               a tracker key and "No PR/issue" have no chip, so they lead with their title. */}
           {key && key.kind !== 'tracker' ? countsLabel : `${group.title} · ${countsLabel}`}

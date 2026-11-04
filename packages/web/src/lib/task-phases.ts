@@ -43,8 +43,12 @@ export function groupKeyLabel(key: TaskGroupKey): string {
   return key.kind === 'tracker' ? key.key : `#${key.number}`
 }
 
-/** What the phase filter offers: the four phases, plus the "No PR/issue" group. */
-export type PhaseFilter = 'all' | TaskPhase | 'none'
+/** What the phase filter offers: the four phases, plus the "No PR/issue" group. It is a facet
+ *  of the Tasks filter row (multi-select, like Status and Workflow): no value picked = all. */
+export type PhaseFilter = TaskPhase | 'none'
+
+/** The facet's options, in the order the filter lists them. */
+export const PHASE_FILTERS: readonly PhaseFilter[] = [...TASK_PHASES, 'none']
 
 // ── Plan-kind (spec A7) ──────────────────────────────────────────────────────────────────────
 
@@ -472,22 +476,22 @@ function keyUrl(key: TaskGroupKey & { number: number }, members: readonly RunRec
 }
 
 /** Which filter value a group answers to. */
-export function groupPhaseFilter(group: Pick<ReferenceGroup, 'key' | 'phase'>): Exclude<PhaseFilter, 'all'> {
+export function groupPhaseFilter(group: Pick<ReferenceGroup, 'key' | 'phase'>): PhaseFilter {
   return group.key === null || group.phase === null ? 'none' : group.phase
 }
 
-/** The phase filter: whole groups, never individual tasks. */
+/** The phase filter: whole groups, never individual tasks. Nothing picked keeps every group. */
 export function filterGroupsByPhase<G extends Pick<ReferenceGroup, 'key' | 'phase'>>(
   groups: readonly G[],
-  filter: PhaseFilter,
+  picked: readonly PhaseFilter[],
 ): G[] {
-  if (filter === 'all') return [...groups]
-  return groups.filter((group) => groupPhaseFilter(group) === filter)
+  if (picked.length === 0) return [...groups]
+  return groups.filter((group) => picked.includes(groupPhaseFilter(group)))
 }
 
-/** Groups per filter chip, `all` included. */
+/** Groups per phase option. */
 export function phaseFilterCounts(groups: readonly Pick<ReferenceGroup, 'key' | 'phase'>[]): Record<PhaseFilter, number> {
-  const counts: Record<PhaseFilter, number> = { all: groups.length, plan: 0, implement: 0, review: 0, delivery: 0, none: 0 }
+  const counts: Record<PhaseFilter, number> = { plan: 0, implement: 0, review: 0, delivery: 0, none: 0 }
   for (const group of groups) counts[groupPhaseFilter(group)] += 1
   return counts
 }
